@@ -18,10 +18,25 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     GetCursorPos, LoadIconW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
-    TrackPopupMenu, CW_USEDEFAULT, IDI_APPLICATION, MF_SEPARATOR, MF_STRING, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_HOTKEY, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
-    WS_EX_NOACTIVATE,
+    TrackPopupMenu, CW_USEDEFAULT, HICON, IDI_APPLICATION, MF_SEPARATOR, MF_STRING,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_HOTKEY, WM_RBUTTONUP, WM_USER,
+    WNDCLASSEXW, WS_EX_NOACTIVATE,
 };
+
+/// App icon resource id (app.rc: `IDI_APP_ICON ICON "assets/uvie.ico"`).
+const IDI_APP_ICON: u16 = 101;
+
+/// Loads the embedded org-avatar icon; falls back to the stock app icon.
+fn app_icon(hinst: HINSTANCE) -> HICON {
+    unsafe {
+        LoadIconW(
+            Some(hinst.into()),
+            PCWSTR::from_raw(IDI_APP_ICON as usize as *const u16),
+        )
+        .or_else(|_| LoadIconW(None, IDI_APPLICATION))
+        .unwrap_or_default()
+    }
+}
 
 /// Menu item ids (WM_COMMAND wParam).
 pub const CMD_TOGGLE_LANGUAGE: usize = 1;
@@ -95,7 +110,7 @@ impl TrayIcon {
             szTip: tip,
             ..Default::default()
         };
-        data.hIcon = unsafe { LoadIconW(None, IDI_APPLICATION)? };
+        data.hIcon = app_icon(hinst.into());
         unsafe {
             Shell_NotifyIconW(NIM_ADD, &data).ok()?;
             // Global Vi/En toggle — same default as uvie-mac (Ctrl+Shift+Z).

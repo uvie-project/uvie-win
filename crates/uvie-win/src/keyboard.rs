@@ -19,7 +19,7 @@ use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyboardLayout, GetKeyboardState, ToUnicodeEx, VIRTUAL_KEY, VK_BACK,
     VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_NEXT,
-    VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
+    VK_PACKET, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, SetWindowsHookExW,
@@ -101,6 +101,13 @@ fn translate(k: &KBDLLHOOKSTRUCT) -> KeyEvent {
         VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN | VK_HOME | VK_END | VK_PRIOR | VK_NEXT
         | VK_DELETE => KeyKind::Navigation,
         _ if is_modifier_vk(vk.0) => KeyKind::Other,
+        // Unicode-packet input (KEYEVENTF_UNICODE: automation, remote
+        // desktops, password-manager auto-type) carries the UTF-16 code
+        // unit in scanCode; vkCode is always VK_PACKET.
+        VK_PACKET => match char::from_u32(k.scanCode) {
+            Some(c) => KeyKind::Char(c),
+            None => KeyKind::Other,
+        },
         _ => match vk_to_char(vk, k.scanCode, k.flags.contains(LLKHF_EXTENDED)) {
             Some(c) => KeyKind::Char(c),
             None => KeyKind::Other,
