@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    name: Build, lint and test uvie-win
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Fetch Windows App SDK metadata
+        shell: pwsh
+        run: ./scripts/fetch-windowsappsdk.ps1
+
+      - name: Cargo fmt
+        run: cargo fmt --all --check
+
+      - name: Cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Cargo test
+        run: cargo test --workspace
+
+      - name: Cargo build (release)
+        run: cargo build --release --workspace
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: uvie-win-x86_64
+          path: |
+            target/release/uvie-win.exe
+            target/release/Microsoft.WindowsAppRuntime.Bootstrap.dll

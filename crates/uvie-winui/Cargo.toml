@@ -1,0 +1,27 @@
+[package]
+name = "uvie-winui"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WinUI 3 settings UI for UVie — bindings generated from the Windows App SDK metadata at build time"
+build = "build.rs"
+
+[dependencies]
+uvie-core.workspace = true
+windows-core.workspace = true
+windows-link.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Win32 side of the bootstrapper (LoadLibrary/GetProcAddress for the
+# Windows App SDK bootstrap DLL). XAML bindings come from build.rs.
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+] }
+
+[build-dependencies]
+windows-bindgen.workspace = true
+serde.workspace = true
+serde_json.workspace = true
