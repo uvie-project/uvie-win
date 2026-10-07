@@ -30,7 +30,7 @@ const IDI_APP_ICON: u16 = 101;
 fn app_icon(hinst: HINSTANCE) -> HICON {
     unsafe {
         LoadIconW(
-            Some(hinst.into()),
+            Some(hinst),
             PCWSTR::from_raw(IDI_APP_ICON as usize as *const u16),
         )
         .or_else(|_| LoadIconW(None, IDI_APPLICATION))
