@@ -18,7 +18,7 @@ Same feature set as uvie-mac:
 - App exclusion list (e.g. terminals, password fields)
 - System-tray icon with Vi/En toggle, settings and quit
 - Launch at login (per-user registry key)
-- English-override mode: hold Ctrl or use the configured hotkey to bypass
+- English-override mode: Ctrl+Shift+Z toggles Vi/En globally (tray menu too)
 - Engine options: quick Telex, quick-start consonants, modern orthography,
   relaxed coda, auto-capitalize
 - WinUI 3 settings window (unpackaged app, bootstrapped at runtime)
@@ -45,11 +45,12 @@ The pinned version is also recorded in `uvie-rs-version`.
 
 - Windows 10 1809+ (x86_64)
 - [Rust](https://rustup.rs) stable (MSVC toolchain) with `rustfmt` + `clippy`
-- Windows App SDK runtime 1.6+ is **not** required for the IME itself; only
-  the settings window uses WinUI 3, and it self-bootstraps
-  `Microsoft.WindowsAppRuntime.Bootstrap.dll` (copied next to the exe by the
-  build script). The full Windows App Runtime is still needed on the machine
-  for the WinUI 3 framework package when the settings window is opened.
+- **Windows App Runtime 1.6+** — required only for the WinUI 3 settings
+  window; the IME itself is pure Win32. Install it once via
+  [`WindowsAppRuntimeInstall-x64.exe`](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/downloads)
+  (the exe then self-bootstraps via `MddBootstrapInitialize2`; the
+  `Microsoft.WindowsAppRuntime.Bootstrap.dll` stub is copied next to
+  `uvie-win.exe` by the build script).
 
 ## Build
 
@@ -72,7 +73,15 @@ The binary is `target/release/uvie-win.exe`
 ```
 
 A tray icon appears. Type Telex (e.g. `vieetj` → `việt`) anywhere.
-Right-click the tray icon to toggle Vi/En, open settings, or quit.
+Right-click the tray icon to toggle Vi/En, open settings, or quit — or press
+`Ctrl+Shift+Z` anywhere to toggle Vi/En.
+
+## Known limitations
+
+- Keystrokes for **elevated** apps are invisible to the low-level hook and
+  pass through uncomposed (same gap as uvie-mac's secure-input mode).
+- Changes made in the Settings window apply on the next launch (no live
+  reload yet).
 
 ## Development
 

@@ -62,8 +62,10 @@ impl Shared {
         self.dispatcher.session.set_input_method(s.input_method);
     }
 
+    /// Persist app-owned state. The app only *reads* `settings.json` — it is
+    /// written exclusively by the settings window — so saving it here would
+    /// clobber UI edits made after startup.
     fn save(&self) {
-        let _ = self.settings.save(&self.paths.settings);
         let _ = self.memory.save(&self.paths.memory);
     }
 }
@@ -145,8 +147,19 @@ impl App {
         })?;
 
         // -- foreground-app watcher -----------------------------------------
+        // Our own exe name, so the focus watcher can ignore the tray
+        // window stealing foreground (it would otherwise attribute
+        // language toggles to uvie-win.exe).
+        let own_exe = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "uvie-win.exe".to_string());
+
         let shared_focus = Rc::clone(&shared);
         let focus = FocusWatcher::install(move |exe| {
+            if exe.eq_ignore_ascii_case(&own_exe) {
+                return;
+            }
             let mut s = shared_focus.borrow_mut();
             s.foreground_exe = exe;
             if s.settings.per_app_language {

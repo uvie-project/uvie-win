@@ -11,8 +11,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_BACK, VK_DELETE,
 };
 
-/// Magic `dwExtraInfo` tag for our own synthesized keystrokes.
-const UVIE_EXTRA_INFO: usize = 0x5556_4945; // "UVIE"
+/// Magic `dwExtraInfo` tag for our own synthesized keystrokes. The
+/// keyboard hook checks this so that only *our* echoes are filtered —
+/// injected input from VNC/RDP/automation still composes normally.
+pub(crate) const UVIE_EXTRA_INFO: usize = 0x5556_4945; // "UVIE"
 
 pub fn inject(plan: &[InputAction]) {
     let mut inputs: Vec<INPUT> = Vec::new();

@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and release UVie for Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Fetch Windows App SDK metadata
+        shell: pwsh
+        run: ./scripts/fetch-windowsappsdk.ps1
+
+      - name: Cargo fmt
+        run: cargo fmt --all --check
+
+      - name: Cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Cargo test
+        run: cargo test --workspace
+
+      - name: Cargo build (release)
+        run: cargo build --release --workspace
+
+      - name: Package uvie-win.exe
+        shell: pwsh
+        run: |
+          $stage = "dist/uvie-win"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item target/release/uvie-win.exe $stage/
+          Copy-Item target/release/Microsoft.WindowsAppRuntime.Bootstrap.dll $stage/
+          Copy-Item README.md $stage/
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/uvie-for-windows-x86_64.zip" -Force
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: UVie for Windows ${{ github.ref_name }}
+          files: dist/uvie-for-windows-x86_64.zip
+          generate_release_notes: true

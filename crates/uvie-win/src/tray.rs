@@ -9,6 +9,9 @@ use std::cell::RefCell;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    RegisterHotKey, UnregisterHotKey, MOD_CONTROL, MOD_SHIFT, VK_Z,
+};
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
@@ -16,7 +19,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     GetCursorPos, LoadIconW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
     TrackPopupMenu, CW_USEDEFAULT, IDI_APPLICATION, MF_SEPARATOR, MF_STRING, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_RBUTTONUP, WM_USER, WNDCLASSEXW, WS_EX_NOACTIVATE,
+    TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_HOTKEY, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
+    WS_EX_NOACTIVATE,
 };
 
 /// Menu item ids (WM_COMMAND wParam).
@@ -28,6 +32,9 @@ pub const CMD_QUIT: usize = 3;
 const WM_TRAYICON: u32 = WM_USER + 0x55;
 
 const WINDOW_CLASS: PCWSTR = w!("UVieWinTrayWindow");
+
+/// RegisterHotKey id for the global Vi/En toggle (Ctrl+Shift+Z).
+const HOTKEY_TOGGLE: i32 = 1;
 
 type MenuHandler = RefCell<Option<Box<dyn FnMut(usize)>>>;
 
@@ -60,7 +67,7 @@ impl TrayIcon {
             CreateWindowExW(
                 WS_EX_NOACTIVATE,
                 WINDOW_CLASS,
-                w!("UVie"),
+                w!("UVie for Windows"),
                 Default::default(),
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
@@ -74,7 +81,7 @@ impl TrayIcon {
         };
 
         let mut tip = [0u16; 128];
-        let text = "UVie — Vietnamese input (Telex)";
+        let text = "UVie for Windows — Vietnamese input (Telex)";
         for (i, c) in text.encode_utf16().enumerate() {
             tip[i] = c;
         }
@@ -91,6 +98,14 @@ impl TrayIcon {
         data.hIcon = unsafe { LoadIconW(None, IDI_APPLICATION)? };
         unsafe {
             Shell_NotifyIconW(NIM_ADD, &data).ok()?;
+            // Global Vi/En toggle — same default as uvie-mac (Ctrl+Shift+Z).
+            // WM_HOTKEY is delivered to this window's proc.
+            let _ = RegisterHotKey(
+                Some(hwnd),
+                HOTKEY_TOGGLE,
+                MOD_CONTROL | MOD_SHIFT,
+                VK_Z.0 as u32,
+            );
         }
         Ok(Self { hwnd })
     }
@@ -112,6 +127,7 @@ impl Drop for TrayIcon {
         };
         unsafe {
             let _ = Shell_NotifyIconW(NIM_DELETE, &data);
+            let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_TOGGLE);
             let _ = DestroyWindow(self.hwnd);
         }
         MENU_HANDLER.with(|h| *h.borrow_mut() = None);
@@ -129,6 +145,16 @@ unsafe extern "system" fn wnd_proc(
             if lparam.0 as u32 == WM_RBUTTONUP {
                 show_menu(hwnd);
             }
+            LRESULT(0)
+        }
+        WM_HOTKEY => {
+            MENU_HANDLER.with(|h| {
+                if let Ok(mut g) = h.try_borrow_mut() {
+                    if let Some(f) = g.as_mut() {
+                        f(CMD_TOGGLE_LANGUAGE);
+                    }
+                }
+            });
             LRESULT(0)
         }
         WM_COMMAND => {

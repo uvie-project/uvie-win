@@ -111,7 +111,10 @@ fn translate(k: &KBDLLHOOKSTRUCT) -> KeyEvent {
         kind,
         ctrl,
         alt,
-        injected: k.flags.contains(LLKHF_INJECTED),
+        // Only treat *our own* SendInput echoes as injected — injected
+        // keystrokes from VNC/RDP/automation must still compose.
+        injected: k.flags.contains(LLKHF_INJECTED)
+            && k.dwExtraInfo == crate::inject::UVIE_EXTRA_INFO,
     }
 }
 
