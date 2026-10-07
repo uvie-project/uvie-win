@@ -101,9 +101,15 @@ impl App {
         let shared_key = Rc::clone(&shared);
         let hook = KeyboardHook::install(move |key: KeyEvent| {
             let mut s = shared_key.borrow_mut();
+            // Never process keys destined for our own windows (settings,
+            // dialogs, tray menus) — otherwise Telex marks would rewrite
+            // what the user types into UVie's own UI.
+            let self_focused = foreground_belongs_to_self();
             let ctx = Context {
                 language: None,
-                app_excluded: s.settings.is_excluded(&s.foreground_exe) || !s.settings.enabled,
+                app_excluded: self_focused
+                    || s.settings.is_excluded(&s.foreground_exe)
+                    || !s.settings.enabled,
                 non_latin_layout: false, // TODO: GetKeyboardLayout language id check
             };
             let chromium = s.settings.is_chromium(&s.foreground_exe);
@@ -192,5 +198,16 @@ impl App {
     pub fn sync_launch_at_login(&self) {
         let s = self.shared.borrow();
         let _ = startup::set_launch_at_login(s.settings.launch_at_login);
+    }
+}
+
+/// True when the foreground window belongs to this process — used to keep
+/// the engine from rewriting keys typed into our own UI.
+fn foreground_belongs_to_self() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    unsafe {
+        let mut pid = 0u32;
+        let _ = GetWindowThreadProcessId(GetForegroundWindow(), Some(&mut pid));
+        pid != 0 && pid == std::process::id()
     }
 }

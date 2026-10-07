@@ -15,11 +15,10 @@ use std::sync::{Arc, Mutex};
 
 use windows_core::{Interface, HSTRING};
 
+use crate::bindings::Microsoft::UI::Text::FontWeights;
 use crate::bindings::Microsoft::UI::Xaml::Controls::{
     Border, Button, ColumnDefinition, ComboBox, ComboBoxItem, FontIcon, Grid, HyperlinkButton,
-    NavigationView, NavigationViewItem, NavigationViewPaneDisplayMode,
-    NavigationViewSelectionChangedEventArgs, Orientation, ScrollBarVisibility, ScrollViewer,
-    StackPanel, TextBlock, TextBox, ToggleSwitch,
+    Orientation, ScrollBarVisibility, ScrollViewer, StackPanel, TextBlock, ToggleSwitch,
 };
 use crate::bindings::Microsoft::UI::Xaml::Media::Brush;
 use crate::bindings::Microsoft::UI::Xaml::{
@@ -27,7 +26,7 @@ use crate::bindings::Microsoft::UI::Xaml::{
     GridUnitType, HorizontalAlignment, RoutedEventHandler, Thickness, VerticalAlignment,
     Visibility, Window,
 };
-use crate::bindings::Windows::Foundation::{PropertyValue, TypedEventHandler, Uri};
+use crate::bindings::Windows::Foundation::{PropertyValue, Uri};
 
 use uvie_core::settings::{Settings, DEFAULT_CHROMIUM_APPS};
 use uvie_core::InputMethod;
@@ -335,6 +334,15 @@ fn section(stack: &StackPanel, title: &str) -> R<StackPanel> {
 /// Icon resource id shared with `app.rc` in uvie-win (org avatar).
 const IDI_APP_ICON: usize = 101;
 
+/// HWND of the XAML settings window (for parenting Win32 dialogs).
+fn xaml_hwnd() -> windows::Win32::Foundation::HWND {
+    use windows::core::w;
+    use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
+    unsafe {
+        FindWindowW(w!("WinUIDesktopWin32WindowClass"), w!("UVie for Windows")).unwrap_or_default()
+    }
+}
+
 /// Size + title-bar icon for the XAML window, via its HWND.
 /// (`AppWindow.Resize` needs `Windows::Graphics::SizeInt32`, which isn't in
 /// the WASDK winmds we bind — the Win32 path needs no extra metadata.)
@@ -347,7 +355,10 @@ fn dress_window() {
     };
 
     unsafe {
-        let hwnd: HWND = FindWindowW(None, w!("UVie for Windows")).unwrap_or_default();
+        // The tray host also creates a hidden window titled "UVie for Windows"
+        // — match the XAML window by its class name so we resize the right one.
+        let hwnd: HWND = FindWindowW(w!("WinUIDesktopWin32WindowClass"), w!("UVie for Windows"))
+            .unwrap_or_default();
         if hwnd.0.is_null() {
             return;
         }
@@ -378,15 +389,6 @@ fn dress_window() {
 fn show_window(state: Shared) -> R<()> {
     let window = Window::new()?;
     window.SetTitle(&HSTRING::from("UVie for Windows"))?;
-    dress_window();
-
-    // -- sidebar ------------------------------------------------------------
-    let nav = NavigationView::new()?;
-    nav.SetPaneDisplayMode(NavigationViewPaneDisplayMode::Left)?;
-    nav.SetIsPaneToggleButtonVisible(false)?;
-    nav.SetIsSettingsVisible(false)?;
-    nav.SetAlwaysShowHeader(false)?;
-    nav.SetOpenPaneLength(200.0)?;
 
     let tabs: &[(&str, &str, &str)] = &[
         ("general", "Tổng quan", glyph::SETTINGS),
@@ -397,20 +399,7 @@ fn show_window(state: Shared) -> R<()> {
         ("about", "Giới thiệu", glyph::INFO),
     ];
 
-    let mut items = Vec::new();
-    for (tag, label, g) in tabs {
-        let item = NavigationViewItem::new()?;
-        item.SetContent(&PropertyValue::CreateString(&HSTRING::from(*label))?)?;
-        item.SetTag(&PropertyValue::CreateString(&HSTRING::from(*tag))?)?;
-        let icon = font_icon(g, 15.0)?;
-        item.SetIcon(&icon)?;
-        item.SetSelectsOnInvoked(true)?;
-        nav.MenuItems()?.Append(&item)?;
-        items.push(item);
-    }
-
-    // -- panes ----------------------------------------------------------------
-    let content = Grid::new()?;
+    // -- panes ---------------------------------------------------------------
     let panes: Vec<ScrollViewer> = vec![
         general_pane(&state)?,
         keyboard_pane(&state)?,
@@ -419,6 +408,7 @@ fn show_window(state: Shared) -> R<()> {
         advanced_pane(&state)?,
         about_pane()?,
     ];
+    let content = Grid::new()?;
     for (i, p) in panes.iter().enumerate() {
         p.SetVisibility(if i == 0 {
             Visibility::Visible
@@ -427,49 +417,102 @@ fn show_window(state: Shared) -> R<()> {
         })?;
         content.Children()?.Append(p)?;
     }
-    nav.SetContent(&content)?;
 
-    // Selection → pane visibility.
-    {
-        let panes = panes.clone();
-        let items = items.clone();
-        nav.SelectionChanged(&TypedEventHandler::<
-            NavigationView,
-            NavigationViewSelectionChangedEventArgs,
-        >::new(move |_nav, args| {
-            let Some(args) = args.as_ref() else {
-                return Ok(());
-            };
-            let selected = args.SelectedItem()?;
-            // Compare canonical IUnknown identity — COM pointer equality.
-            let selected_unk = selected.cast::<windows_core::IUnknown>().ok();
-            let idx = items
-                .iter()
-                .position(|item| {
-                    let item_unk = item.cast::<windows_core::IUnknown>().ok();
-                    selected_unk.is_some()
-                        && item_unk.is_some()
-                        && Interface::as_raw(selected_unk.as_ref().unwrap())
-                            == Interface::as_raw(item_unk.as_ref().unwrap())
-                })
-                .unwrap_or(0);
-            for (i, p) in panes.iter().enumerate() {
-                p.SetVisibility(if i == idx {
+    // -- sidebar (hand-rolled: NavigationView's template fast-fails on
+    //    WASDK 1.6 / Server 2022; a Border + Buttons gives the same look) ----
+    let side = Border::new()?;
+    side.SetWidth(208.0)?;
+    if let Some(b) = theme_brush("CardBackgroundFillColorSecondaryBrush") {
+        side.SetBackground(&b)?;
+    }
+    side.SetBorderThickness(Thickness {
+        Left: 0.0,
+        Top: 0.0,
+        Right: 1.0,
+        Bottom: 0.0,
+    })?;
+    if let Some(b) = theme_brush("DividerStrokeColorDefaultBrush") {
+        side.SetBorderBrush(&b)?;
+    }
+    let side_stack = StackPanel::new()?;
+    side_stack.SetSpacing(2.0)?;
+    side_stack.SetMargin(Thickness {
+        Left: 8.0,
+        Top: 8.0,
+        Right: 8.0,
+        Bottom: 8.0,
+    })?;
+
+    let header = TextBlock::new()?;
+    header.SetText(&HSTRING::from("UVie"))?;
+    header.SetFontSize(20.0)?;
+    header.SetFontWeight(FontWeights::SemiBold()?)?;
+    header.SetMargin(Thickness {
+        Left: 10.0,
+        Top: 8.0,
+        Right: 0.0,
+        Bottom: 16.0,
+    })?;
+    side_stack.Children()?.Append(&header)?;
+
+    let mut buttons: Vec<Button> = Vec::new();
+    for (_, label, g) in tabs {
+        let btn = Button::new()?;
+        let row = grid(&[px(30.0), STAR])?;
+        let ic = font_icon(g, 15.0)?;
+        ic.SetVerticalAlignment(VerticalAlignment::Center)?;
+        ic.SetHorizontalAlignment(HorizontalAlignment::Center)?;
+        put(&row, 0, &ic)?;
+        let tb = text(label, 13.0)?;
+        tb.SetVerticalAlignment(VerticalAlignment::Center)?;
+        put(&row, 1, &tb)?;
+        btn.SetContent(&row)?;
+        btn.SetHorizontalAlignment(HorizontalAlignment::Stretch)?;
+        btn.SetHorizontalContentAlignment(HorizontalAlignment::Left)?;
+        if let Some(b) = theme_brush("ControlFillColorTransparentBrush") {
+            btn.SetBackground(&b)?;
+        }
+        side_stack.Children()?.Append(&btn)?;
+        buttons.push(btn);
+    }
+    side.SetChild(&side_stack)?;
+
+    // Click → swap visible pane + selection highlight.
+    for (i, btn) in buttons.iter().enumerate() {
+        let panes_c = panes.clone();
+        let buttons_c = buttons.clone();
+        btn.Click(&RoutedEventHandler::new(move |_, _| {
+            for (j, p) in panes_c.iter().enumerate() {
+                p.SetVisibility(if j == i {
                     Visibility::Visible
                 } else {
                     Visibility::Collapsed
                 })?;
             }
+            for (j, b) in buttons_c.iter().enumerate() {
+                let key = if j == i {
+                    "SubtleFillColorSecondaryBrush"
+                } else {
+                    "ControlFillColorTransparentBrush"
+                };
+                if let Some(brush) = theme_brush(key) {
+                    b.SetBackground(&brush)?;
+                }
+            }
             Ok(())
         }))?;
     }
-
-    if let Some(first) = items.first() {
-        nav.SetSelectedItem(first)?;
+    if let Some(brush) = theme_brush("SubtleFillColorSecondaryBrush") {
+        buttons[0].SetBackground(&brush)?;
     }
 
-    window.SetContent(&nav)?;
+    let root = grid(&[px(208.0), STAR])?;
+    put(&root, 0, &side)?;
+    put(&root, 1, &content)?;
+
+    window.SetContent(&root)?;
     window.Activate()?;
+    dress_window();
     Ok(())
 }
 
@@ -709,51 +752,39 @@ fn macro_pane(state: &Shared) -> R<ScrollViewer> {
         rebuild_macro_list(&list, state)?;
     }
 
-    // Add form: two inputs + add button.
+    // Add button — opens a Win32 dialog (XAML TextBox fast-fails on
+    // Server 2022 + WASDK 1.6, see `entry_dialog`).
     {
-        let row = grid(&[px(140.0), STAR, AUTO])?;
-        row.SetPadding(Thickness {
+        let add = Button::new()?;
+        add.SetContent(&PropertyValue::CreateString(&HSTRING::from(
+            "＋ Thêm macro",
+        ))?)?;
+        add.SetHorizontalAlignment(HorizontalAlignment::Left)?;
+        add.SetMargin(Thickness {
             Left: 0.0,
             Top: 10.0,
             Right: 0.0,
             Bottom: 0.0,
         })?;
-
-        let abbr = TextBox::new()?;
-        abbr.SetPlaceholderText(&HSTRING::from("Viết tắt (vd: sg)"))?;
-        put(&row, 0, &abbr)?;
-
-        let expansion = TextBox::new()?;
-        expansion.SetPlaceholderText(&HSTRING::from("Văn bản thay thế (vd: Sài Gòn)"))?;
-        expansion.SetMargin(Thickness {
-            Left: 8.0,
-            Top: 0.0,
-            Right: 8.0,
-            Bottom: 0.0,
-        })?;
-        put(&row, 1, &expansion)?;
-
-        let add = Button::new()?;
-        add.SetContent(&PropertyValue::CreateString(&HSTRING::from("Thêm"))?)?;
         let state_c = state.clone();
-        let abbr_c = abbr.clone();
-        let expansion_c = expansion.clone();
         let list_c = list.clone();
         add.Click(&RoutedEventHandler::new(move |_, _| {
-            let trigger = abbr_c.Text()?.to_string_lossy().trim().to_string();
-            let repl = expansion_c.Text()?.to_string_lossy().trim().to_string();
-            if !trigger.is_empty() && !repl.is_empty() {
-                state_c.macros.lock().unwrap().add(&trigger, &repl);
-                state_c.save_macros();
-                abbr_c.SetText(&HSTRING::new())?;
-                expansion_c.SetText(&HSTRING::new())?;
-                rebuild_macro_list(&list_c, &state_c)?;
+            if let Some(values) = crate::entry_dialog::prompt(
+                xaml_hwnd(),
+                "Thêm macro",
+                &["Viết tắt (vd: sg)", "Văn bản thay thế (vd: Sài Gòn)"],
+            ) {
+                let trigger = values[0].trim();
+                let repl = values.get(1).map(|s| s.trim()).unwrap_or("");
+                if !trigger.is_empty() && !repl.is_empty() {
+                    state_c.macros.lock().unwrap().add(trigger, repl);
+                    state_c.save_macros();
+                    rebuild_macro_list(&list_c, &state_c)?;
+                }
             }
             Ok(())
         }))?;
-        put(&row, 2, &add)?;
-
-        stack.Children()?.Append(&row)?;
+        stack.Children()?.Append(&add)?;
     }
 
     Ok(scroll)
@@ -841,7 +872,7 @@ fn app_list_card(
 
     rebuild_app_list(&list, state, get, set)?;
 
-    // Footer: TextBox + Add + Reset.
+    // Footer: Add (Win32 dialog — XAML TextBox fast-fails) + Reset.
     let footer = grid(&[STAR, AUTO, AUTO])?;
     footer.SetPadding(Thickness {
         Left: 14.0,
@@ -849,34 +880,29 @@ fn app_list_card(
         Right: 14.0,
         Bottom: 12.0,
     })?;
-    let input = TextBox::new()?;
-    input.SetPlaceholderText(&HSTRING::from("vd: chrome.exe"))?;
-    put(&footer, 0, &input)?;
 
     let add = Button::new()?;
-    add.SetContent(&PropertyValue::CreateString(&HSTRING::from("Thêm"))?)?;
-    add.SetMargin(Thickness {
-        Left: 8.0,
-        Top: 0.0,
-        Right: 0.0,
-        Bottom: 0.0,
-    })?;
+    add.SetContent(&PropertyValue::CreateString(&HSTRING::from("＋ Thêm…"))?)?;
     {
         let state_c = state.clone();
-        let input_c = input.clone();
         let list_c = list.clone();
         add.Click(&RoutedEventHandler::new(move |_, _| {
-            let exe = input_c.Text()?.to_string_lossy().trim().to_lowercase();
-            if !exe.is_empty() {
-                let mut s = state_c.settings.lock().unwrap();
-                let mut apps = get(&s);
-                if !apps.iter().any(|a| a == &exe) {
-                    apps.push(exe);
-                    set(&mut s, apps);
-                    drop(s);
-                    state_c.save_settings();
-                    input_c.SetText(&HSTRING::new())?;
-                    rebuild_app_list(&list_c, &state_c, get, set)?;
+            if let Some(values) = crate::entry_dialog::prompt(
+                xaml_hwnd(),
+                "Thêm ứng dụng",
+                &["Tên tiến trình (vd: chrome.exe)"],
+            ) {
+                let exe = values[0].trim().to_lowercase();
+                if !exe.is_empty() {
+                    let mut s = state_c.settings.lock().unwrap();
+                    let mut apps = get(&s);
+                    if !apps.iter().any(|a| a == &exe) {
+                        apps.push(exe);
+                        set(&mut s, apps);
+                        drop(s);
+                        state_c.save_settings();
+                        rebuild_app_list(&list_c, &state_c, get, set)?;
+                    }
                 }
             }
             Ok(())

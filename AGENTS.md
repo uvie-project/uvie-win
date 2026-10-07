@@ -59,6 +59,26 @@ cargo fmt --all --check
   `FnMut(Ref<'_, S>, Ref<'_, A>) -> Result<()> + Send + 'static`; use
   `.ok()`/`.as_ref()` on the `Ref` args, and `args.SelectedItem()?` for the
   payload.
+- **NavigationView and TextBox fast-fail on Server 2022 + WASDK 1.6.** Any
+  control that spins up the XAML text-input path (TextBox, and
+  NavigationView's pane search box) aborts the whole process at render time
+  — no exception, no WER record, just a silent exit inside
+  `Application::Start`'s loop. Bisected control-by-control: Grid/StackPanel/
+  Border/ScrollViewer/TextBlock/Button/ToggleSwitch/ComboBox/FontIcon/
+  HyperlinkButton all render fine. The settings UI therefore uses a
+  hand-rolled sidebar (Border + Buttons) instead of NavigationView, and
+  collects text through `entry_dialog::prompt` — a plain Win32 modal
+  (STATIC/EDIT/BUTTON) that never touches XAML.
+- `EnableWindow` lives in `Win32::UI::Input::KeyboardAndMouse`, not
+  `WindowsAndMessaging`; `BS_DEFPUSHBUTTON` is an `i32` const (or into the
+  style mask, don't wrap in `WINDOW_STYLE`); `GetStockObject` returns
+  `HGDIOBJ` directly (not `Result`).
+- The tray's hidden helper window shares the title "UVie for Windows" —
+  `FindWindowW` by title alone can return the wrong one. Match the XAML
+  window by class: `WinUIDesktopWin32WindowClass` + title.
+- The keyboard hook must skip keys when the foreground window belongs to
+  this process (`GetForegroundWindow` + pid compare), or the engine rewrites
+  what the user types into UVie's own settings UI/dialogs.
 - **`bash` on Windows PATH is often WSL's bash.** The fetch script must work
   in both Git Bash and WSL (unzip → bsdtar → python3/python fall-through;
   GNU tar cannot read zip).

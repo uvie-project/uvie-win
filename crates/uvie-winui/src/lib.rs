@@ -22,6 +22,7 @@ mod bindings {
 }
 
 mod bootstrap;
+mod entry_dialog;
 mod settings_window;
 
 use std::path::PathBuf;
