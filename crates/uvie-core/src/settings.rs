@@ -64,9 +64,32 @@ pub struct Settings {
     pub launch_at_login: bool,
     /// Executables the IME ignores entirely (lowercase exe names).
     pub excluded_apps: Vec<String>,
+    /// Chromium-based apps whose text fields misbehave with plain synthetic
+    /// backspaces (omnibox drops/reorders them). For these the injector
+    /// selects the text (Shift+Left) and overwrites it — the same workaround
+    /// uvie-mac applies to Chromium browsers.
+    pub chromium_apps: Vec<String>,
+    /// Text macros: expand an abbreviation on Space/Enter.
+    pub macro_enabled: bool,
     /// Vi/En toggle hotkey.
     pub hotkey: Hotkey,
 }
+
+/// Chromium browsers (Windows exe names) that get the select-and-overwrite
+/// workaround by default — the Windows counterpart of
+/// `AppDefaults.chromiumBrowsers` in uvie-mac.
+pub const DEFAULT_CHROMIUM_APPS: &[&str] = &[
+    "chrome.exe",
+    "msedge.exe",
+    "brave.exe",
+    "vivaldi.exe",
+    "arc.exe",
+    "opera.exe",
+    "operagx.exe",
+    "chromium.exe",
+    "comet.exe",
+    "atlas.exe",
+];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -82,6 +105,11 @@ impl Default for Settings {
             auto_capitalize: false,
             launch_at_login: false,
             excluded_apps: Vec::new(),
+            chromium_apps: DEFAULT_CHROMIUM_APPS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            macro_enabled: false,
             hotkey: Hotkey::default(),
         }
     }
@@ -104,8 +132,15 @@ impl Settings {
     }
 
     pub fn is_excluded(&self, exe_name: &str) -> bool {
-        let exe = exe_name.to_ascii_lowercase();
-        self.excluded_apps.iter().any(|e| e == &exe)
+        self.excluded_apps
+            .iter()
+            .any(|e| e.eq_ignore_ascii_case(exe_name))
+    }
+
+    pub fn is_chromium(&self, exe_name: &str) -> bool {
+        self.chromium_apps
+            .iter()
+            .any(|e| e.eq_ignore_ascii_case(exe_name))
     }
 }
 
@@ -122,6 +157,8 @@ impl std::fmt::Debug for Settings {
             .field("auto_capitalize", &self.auto_capitalize)
             .field("launch_at_login", &self.launch_at_login)
             .field("excluded_apps", &self.excluded_apps)
+            .field("chromium_apps", &self.chromium_apps)
+            .field("macro_enabled", &self.macro_enabled)
             .field("hotkey", &self.hotkey)
             .finish_non_exhaustive()
     }

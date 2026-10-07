@@ -9,6 +9,7 @@ use std::rc::Rc;
 use uvie_core::dispatcher::{Context, Dispatch, Dispatcher, InputLanguage};
 use uvie_core::engine_session::{EngineOptions, EngineSession};
 use uvie_core::keys::KeyEvent;
+use uvie_core::macros::MacroTable;
 use uvie_core::memory::LanguageMemory;
 use uvie_core::settings::{LanguagePref, Settings};
 
@@ -22,8 +23,8 @@ use crate::tray::{self, TrayIcon};
 pub struct Paths {
     pub settings: PathBuf,
     pub memory: PathBuf,
-    /// Macro-definition file; read once macro UI/editing lands.
-    #[allow(dead_code)]
+    /// Macro-definition file (`macros.json`): written by the settings
+    /// window, loaded once here at startup.
     pub macros: PathBuf,
 }
 
@@ -84,7 +85,9 @@ impl App {
         let settings = Settings::load(&paths.settings);
         let memory = LanguageMemory::load(&paths.memory);
 
-        let dispatcher = Dispatcher::new(EngineSession::new());
+        let mut dispatcher = Dispatcher::new(EngineSession::new());
+        dispatcher.macros = MacroTable::load(&paths.macros);
+        dispatcher.macro_enabled = settings.macro_enabled;
         let shared = Rc::new(RefCell::new(Shared {
             dispatcher,
             settings,
@@ -103,13 +106,14 @@ impl App {
                 app_excluded: s.settings.is_excluded(&s.foreground_exe) || !s.settings.enabled,
                 non_latin_layout: false, // TODO: GetKeyboardLayout language id check
             };
+            let chromium = s.settings.is_chromium(&s.foreground_exe);
             match s.dispatcher.handle(key, &ctx) {
                 Dispatch::Pass(plan) => {
-                    inject::inject(&plan);
+                    inject::inject(&plan, chromium);
                     false
                 }
                 Dispatch::Consume(plan) => {
-                    inject::inject(&plan);
+                    inject::inject(&plan, chromium);
                     true
                 }
             }

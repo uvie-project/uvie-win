@@ -29,9 +29,9 @@ use std::path::PathBuf;
 /// Spawn the dedicated UI thread that hosts the WinUI 3 settings window.
 /// Safe to call once; subsequent calls are no-ops (XAML `Application::Start`
 /// may only run once per process).
-pub fn spawn_settings_thread(settings_path: PathBuf) {
+pub fn spawn_settings_thread(settings_path: PathBuf, macros_path: PathBuf) {
     std::thread::spawn(move || {
-        if let Err(e) = settings_window::run(settings_path) {
+        if let Err(e) = settings_window::run(settings_path, macros_path) {
             eprintln!("uvie-winui: settings window failed: {e}");
         }
     });

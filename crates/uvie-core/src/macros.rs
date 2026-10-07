@@ -3,6 +3,7 @@
 //! MacroManager).
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MacroEntry {
@@ -41,5 +42,23 @@ impl MacroTable {
             .iter()
             .find(|e| e.trigger == word)
             .map(|e| e.expansion.as_str())
+    }
+
+    /// Load the table from `macros.json`. Missing/corrupt files yield an
+    /// empty table — same resilience rule as `Settings::load`.
+    /// Written exclusively by the settings window; the app only reads.
+    pub fn load(path: &Path) -> Self {
+        match std::fs::read_to_string(path) {
+            Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+            Err(_) => Self::default(),
+        }
+    }
+
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let text = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        std::fs::write(path, text)
     }
 }

@@ -8,7 +8,7 @@ static UI: OnceLock<()> = OnceLock::new();
 /// Open (or focus) the settings window. Called from the tray menu.
 pub fn open_settings() {
     let _ = UI.get_or_init(|| {
-        let settings_path = crate::app::Paths::appdata().settings;
-        uvie_winui::spawn_settings_thread(settings_path);
+        let paths = crate::app::Paths::appdata();
+        uvie_winui::spawn_settings_thread(paths.settings, paths.macros);
     });
 }

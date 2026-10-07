@@ -19,6 +19,7 @@ serde_json.workspace = true
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [build-dependencies]

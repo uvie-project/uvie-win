@@ -40,9 +40,25 @@ cargo fmt --all --check
   `UI::Accessibility`.
 - **XAML callbacks need `Send + 'static`** — share state as
   `Arc<Mutex<Settings>>`, never `Rc<RefCell<..>>`.
-- **`IInspectable` params** (Header, Content, ...) take
-  `PropertyValue::CreateString(&HSTRING)` boxing; `Ref::cast()` requires
-  `use windows_core::Interface`.
+- **`IInspectable` params** (Header, Content, ResourceDictionary keys, nav
+  item Tags) take `PropertyValue::CreateString(&HSTRING)` boxing;
+  `Ref::cast()` requires `use windows_core::Interface`.
+- **Namespace filter additions that matter**: `Windows.Foundation` gives
+  `TypedEventHandler` (NavigationView.SelectionChanged) and `Uri`
+  (HyperlinkButton); `Windows.UI.Text` gives `FontWeight`. **`Windows.Graphics`
+  and `Microsoft.Graphics` produce almost nothing** — `SizeInt32` isn't in the
+  WASDK winmds, so `AppWindow.Resize`/`MoveAndResize` come out uncallable.
+  Size/set the icon on the window via Win32 instead: `FindWindowW(title)` →
+  `SetWindowPos` + `SendMessageW(WM_SETICON)` (see `dress_window()`).
+- **`Grid::SetColumn` takes `Param<FrameworkElement>`**, not `UIElement` —
+  cast children to `FrameworkElement` first.
+- **COM identity compare**: for "which nav item got selected", cast both to
+  `windows_core::IUnknown` and compare `Interface::as_raw` — comparing
+  `IInspectable`/`NavigationViewItem` pointers directly can alias tear-offs.
+- **XAML event handlers** (`SelectionChanged`, `Toggled`, `Click`, ...) need
+  `FnMut(Ref<'_, S>, Ref<'_, A>) -> Result<()> + Send + 'static`; use
+  `.ok()`/`.as_ref()` on the `Ref` args, and `args.SelectedItem()?` for the
+  payload.
 - **`bash` on Windows PATH is often WSL's bash.** The fetch script must work
   in both Git Bash and WSL (unzip → bsdtar → python3/python fall-through;
   GNU tar cannot read zip).

@@ -106,4 +106,11 @@ impl EngineSession {
     pub fn committed_text(&self) -> String {
         self.engine.committed_text_diff().to_owned()
     }
+
+    /// The rendered (post-conversion) text of the current composing word.
+    /// Macro matching needs committed + composing on-screen text, same as
+    /// uvie-mac's `getCurrentText()`.
+    pub fn current_output(&self) -> String {
+        self.engine.current_output_diff().to_string()
+    }
 }

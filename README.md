@@ -14,14 +14,19 @@ Same feature set as uvie-mac:
 
 - Telex / VNI / SimpleTelex input methods (uvie-rs `UltraFastViEngine`)
 - Per-application Vi/En language memory
-- Macros (shortcode expansion from `~/Library`-style user config)
-- App exclusion list (e.g. terminals, password fields)
+- Text macros: abbreviation → full text on Space/Enter (editable in
+  Settings → Macro, stored in `%APPDATA%\UVie\macros.json`)
+- App exclusion list (e.g. terminals, password fields) plus a Chromium-app
+  compatibility list — browsers get a select-and-overwrite injection mode
+  instead of synthetic backspaces (omnibox-safe, like uvie-mac)
 - System-tray icon with Vi/En toggle, settings and quit
 - Launch at login (per-user registry key)
 - English-override mode: Ctrl+Shift+Z toggles Vi/En globally (tray menu too)
 - Engine options: quick Telex, quick-start consonants, modern orthography,
   relaxed coda, auto-capitalize
-- WinUI 3 settings window (unpackaged app, bootstrapped at runtime)
+- WinUI 3 settings window (unpackaged app, bootstrapped at runtime) —
+  sidebar + panes mirroring uvie-mac's preferences: Tổng quan, Bàn phím,
+  Macro, Ứng dụng, Nâng cao, Giới thiệu (Vietnamese UI)
 
 ## Architecture
 

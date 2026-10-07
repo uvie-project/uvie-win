@@ -64,6 +64,9 @@ pub struct Dispatcher {
     /// When true, auto-capitalize the first letter of a sentence (uvie-mac
     /// "sentence start" behavior — placeholder flag; implementation TODO).
     pub auto_capitalize: bool,
+    /// Text macro expansion armed (uvie-mac `macroEnabled`). The table lives
+    /// in `self.macros`.
+    pub macro_enabled: bool,
     /// Caret distance back to the end of the newest committed word, used to
     /// arm LabanKey-style post-commit editing (`edit_at`). Stays 0 until the
     /// host implements caret tracking (UI Automation / TSF on Windows).
@@ -77,6 +80,7 @@ impl Dispatcher {
             language: InputLanguage::Vietnamese,
             macros: MacroTable::default(),
             auto_capitalize: false,
+            macro_enabled: false,
             caret_back: 0,
         }
     }
@@ -145,6 +149,15 @@ impl Dispatcher {
 
         // Word-terminating printable key (space/punctuation): commit first.
         if crate::keys::is_word_break_char(c) {
+            // Macro expansion fires on Space only (uvie-mac never expands
+            // on punctuation). The space itself is swallowed — the
+            // expansion replaces abbreviation+terminator.
+            if c == ' ' {
+                if let Some(plan) = self.try_expand_macro() {
+                    self.caret_back = 0;
+                    return Dispatch::Consume(plan);
+                }
+            }
             let (bs, suffix) = self.session.commit();
             let mut plan = Vec::new();
             if bs > 0 {
@@ -153,8 +166,6 @@ impl Dispatcher {
             if !suffix.is_empty() {
                 plan.push(InputAction::Text(suffix));
             }
-            // TODO(macros): check the just-committed word against
-            // `self.macros` and rewrite it when a trigger matches.
             self.caret_back = 0;
             return Dispatch::Pass(plan);
         }
@@ -201,6 +212,12 @@ impl Dispatcher {
     }
 
     fn handle_break(&mut self) -> Dispatch {
+        // Enter (and other break keys) expand a matching abbreviation,
+        // exactly like Space does in uvie-mac — the key is consumed.
+        if let Some(plan) = self.try_expand_macro() {
+            self.caret_back = 0;
+            return Dispatch::Consume(plan);
+        }
         let (bs, suffix) = self.session.commit();
         self.caret_back = 0;
         let mut plan = Vec::new();
@@ -211,5 +228,27 @@ impl Dispatcher {
             plan.push(InputAction::Text(suffix));
         }
         Dispatch::Pass(plan)
+    }
+
+    /// If the on-screen word (committed prefix + composing) is a macro
+    /// trigger, produce the expansion plan: erase it, type the expansion.
+    /// Mirrors `applyMacroExpansion` in uvie-mac's EventTap.
+    fn try_expand_macro(&mut self) -> Option<Vec<InputAction>> {
+        if !self.macro_enabled {
+            return None;
+        }
+        let committed = self.session.committed_text();
+        let composing = self.session.current_output();
+        if committed.is_empty() && composing.is_empty() {
+            return None;
+        }
+        let text = format!("{committed}{composing}");
+        let expansion = self.macros.lookup(&text)?.to_owned();
+        self.session.reset();
+        self.caret_back = 0;
+        Some(vec![
+            InputAction::Backspace(text.chars().count()),
+            InputAction::Text(expansion),
+        ])
     }
 }

@@ -4,7 +4,7 @@
 
 use crate::dispatcher::{Context, Dispatch, Dispatcher, InputAction, InputLanguage};
 use crate::engine_session::{EngineOptions, EngineSession};
-use crate::keys::KeyEvent;
+use crate::keys::{KeyEvent, KeyKind};
 use crate::memory::LanguageMemory;
 use crate::settings::{LanguagePref, Settings};
 use uvie::InputMethod;
@@ -138,12 +138,101 @@ fn settings_json_roundtrip() {
         input_method: InputMethod::Vni,
         quick_telex: true,
         excluded_apps: vec!["notepad.exe".into()],
+        macro_enabled: true,
+        chromium_apps: vec!["mybrowser.exe".into()],
         ..Default::default()
     };
     let text = serde_json::to_string(&s).unwrap();
     let back: Settings = serde_json::from_str(&text).unwrap();
     assert_eq!(back, s);
     assert!(back.is_excluded("NOTEPAD.EXE"));
+}
+
+#[test]
+fn settings_defaults_ship_chromium_list() {
+    // Mirrors uvie-mac's `defaultChromiumBrowsers`: a fresh profile knows
+    // the mainstream Chromium browsers and gets the overwrite workaround.
+    let s = Settings::default();
+    for exe in ["chrome.exe", "msedge.exe", "brave.exe", "arc.exe"] {
+        assert!(s.is_chromium(exe), "{exe} should default to chromium list");
+    }
+    assert!(!s.is_chromium("notepad.exe"));
+    assert!(!s.is_chromium("code.exe"));
+    // Case-insensitive, like is_excluded.
+    let s = Settings {
+        chromium_apps: vec!["MyBrowser.EXE".into()],
+        ..Default::default()
+    };
+    assert!(s.is_chromium("mybrowser.exe"));
+}
+
+/// Drive `text` through the dispatcher then send one Break key (Enter).
+/// Returns the reconstructed screen; Enter is consumed by macro expansion
+/// or appended as a newline when it passes through.
+fn replay_enter(d: &mut Dispatcher, text: &str) -> String {
+    let mut screen = String::new();
+    for ch in text.chars() {
+        match d.handle(KeyEvent::char(ch), &Context::default()) {
+            Dispatch::Consume(plan) => apply(&mut screen, &plan),
+            Dispatch::Pass(plan) => {
+                apply(&mut screen, &plan);
+                screen.push(ch);
+            }
+        }
+    }
+    let enter = KeyEvent {
+        kind: KeyKind::Break,
+        ..KeyEvent::char('\0')
+    };
+    match d.handle(enter, &Context::default()) {
+        Dispatch::Consume(plan) => apply(&mut screen, &plan),
+        Dispatch::Pass(plan) => {
+            apply(&mut screen, &plan);
+            screen.push('\n');
+        }
+    }
+    screen
+}
+
+#[test]
+fn macro_expands_on_space_and_swallows_it() {
+    let mut d = dispatcher();
+    d.macro_enabled = true;
+    d.macros.add("sg", "Sài Gòn");
+    // The space itself is consumed — the expansion replaces
+    // abbreviation+terminator, like uvie-mac's applyMacroExpansion.
+    assert_eq!(replay(&mut d, "sg "), "Sài Gòn");
+}
+
+#[test]
+fn macro_expands_on_enter() {
+    let mut d = dispatcher();
+    d.macro_enabled = true;
+    d.macros.add("hn", "Hà Nội");
+    assert_eq!(replay_enter(&mut d, "hn"), "Hà Nội");
+}
+
+#[test]
+fn macro_disabled_leaves_abbreviation_alone() {
+    let mut d = dispatcher();
+    d.macros.add("sg", "Sài Gòn");
+    // macro_enabled defaults off — text must come through untouched.
+    assert_eq!(replay(&mut d, "sg "), "sg ");
+}
+
+#[test]
+fn macro_table_load_save_roundtrip() {
+    let dir = std::env::temp_dir().join("uvie-macro-test");
+    let path = dir.join("macros.json");
+    let mut t = crate::macros::MacroTable::default();
+    t.add("gd", "gửi đến");
+    t.save(&path).unwrap();
+    let back = crate::macros::MacroTable::load(&path);
+    assert_eq!(back.lookup("gd"), Some("gửi đến"));
+    // Missing file falls back to defaults without panicking.
+    let missing = crate::macros::MacroTable::load(&dir.join("nope.json"));
+    assert!(missing.lookup("gd").is_none());
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]

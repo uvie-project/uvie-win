@@ -71,10 +71,19 @@ fn main() {
         "Microsoft.UI.Windowing",
         "Microsoft.UI.Dispatching",
         "Microsoft.UI.Text",
+        // SizeInt32/PointInt32 for AppWindow.Resize/MoveAndResize.
+        "Windows.Graphics",
         "Microsoft.Windows.ApplicationModel.DynamicDependency",
         // PropertyValue::CreateString/… boxes primitives into IInspectable
         // (control Header/Content params take IInspectable).
         "Windows.Foundation.PropertyValue",
+        // Generic delegate behind NavigationView.SelectionChanged /
+        // ItemInvoked and similar XAML events.
+        "Windows.Foundation.TypedEventHandler",
+        // HyperlinkButton.NavigateUri / BitmapImage.UriSource targets.
+        "Windows.Foundation.Uri",
+        // FontWeight for TextBlock.SetFontWeight.
+        "Windows.UI.Text",
     ] {
         args.push("--filter".into());
         args.push(f.into());
