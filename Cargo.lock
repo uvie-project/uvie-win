@@ -485,7 +485,7 @@ dependencies = [
 
 [[package]]
 name = "uvie-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "uvie-win"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "embed-resource",
  "serde",
@@ -506,7 +506,7 @@ dependencies = [
 
 [[package]]
 name = "uvie-winui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",

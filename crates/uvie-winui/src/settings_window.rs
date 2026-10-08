@@ -11,6 +11,7 @@
 //! the running app only reads them (see `Shared::save` in uvie-win).
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use windows_core::{Interface, HSTRING};
@@ -18,13 +19,19 @@ use windows_core::{Interface, HSTRING};
 use crate::bindings::Microsoft::UI::Text::FontWeights;
 use crate::bindings::Microsoft::UI::Xaml::Controls::{
     Border, Button, ColumnDefinition, ComboBox, ComboBoxItem, FontIcon, Grid, HyperlinkButton,
-    Orientation, ScrollBarVisibility, ScrollViewer, StackPanel, TextBlock, ToggleSwitch,
+    Image, Orientation, RowDefinition, ScrollBarVisibility, ScrollViewer, StackPanel, TextBlock,
+    ToggleSwitch,
 };
-use crate::bindings::Microsoft::UI::Xaml::Media::Brush;
+use crate::bindings::Microsoft::UI::Xaml::Input::PointerEventHandler;
+use crate::bindings::Microsoft::UI::Xaml::Markup::XamlReader;
+use crate::bindings::Microsoft::UI::Xaml::Media::Imaging::BitmapImage;
+use crate::bindings::Microsoft::UI::Xaml::Media::{
+    Brush, ImageSource, MicaBackdrop, Stretch, SystemBackdrop,
+};
 use crate::bindings::Microsoft::UI::Xaml::{
     Application, ApplicationInitializationCallback, CornerRadius, FrameworkElement, GridLength,
-    GridUnitType, HorizontalAlignment, RoutedEventHandler, Thickness, VerticalAlignment,
-    Visibility, Window,
+    GridUnitType, HorizontalAlignment, RoutedEventHandler, Style, Thickness, UIElement,
+    VerticalAlignment, Visibility, Window,
 };
 use crate::bindings::Windows::Foundation::{PropertyValue, Uri};
 
@@ -102,6 +109,110 @@ fn theme_brush(key: &str) -> Option<Brush> {
     res.Lookup(&boxed).ok()?.cast().ok()
 }
 
+/// First available theme brush from a preference list.
+fn theme_brush_any(keys: &[&str]) -> Option<Brush> {
+    keys.iter().find_map(|k| theme_brush(k))
+}
+
+/// Parse a color string ("Transparent", "#AARRGGBB", named colors) into a
+/// Brush via the real XAML parser — `Windows.UI.Color`/`SolidColorBrush.SetColor`
+/// aren't in our generated bindings, so this is how colored brushes get built.
+fn brush_from_str(s: &str) -> Option<Brush> {
+    let xaml = format!(
+        "<SolidColorBrush xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Color='{s}'/>"
+    );
+    XamlReader::Load(&HSTRING::from(xaml)).ok()?.cast().ok()
+}
+
+/// Theme brush if any key resolves, else a parsed string fallback.
+fn fill_or(keys: &[&str], fallback: &str) -> Option<Brush> {
+    theme_brush_any(keys).or_else(|| brush_from_str(fallback))
+}
+
+/// System accent blue (Win11 default) for the nav pill / accent chips.
+fn accent_brush() -> Option<Brush> {
+    fill_or(
+        &["AccentFillColorDefaultBrush", "SystemAccentColor"],
+        "#FF0067C0",
+    )
+}
+
+/// Look up a theme `Style` resource (e.g. "AccentButtonStyle").
+fn theme_style(key: &str) -> Option<Style> {
+    let res = Application::Current().ok()?.Resources().ok()?;
+    let boxed = PropertyValue::CreateString(&HSTRING::from(key)).ok()?;
+    res.Lookup(&boxed).ok()?.cast().ok()
+}
+
+/// Try to apply a named style to a control; no-op if absent.
+fn apply_style(control: &impl Interface, key: &str) {
+    if let Ok(c) = control.cast::<crate::bindings::Microsoft::UI::Xaml::Controls::Control>() {
+        if let Some(s) = theme_style(key) {
+            let _ = c.SetStyle(&s);
+        }
+    }
+}
+
+/// The org avatar PNG shared with `uvie-win`'s .ico resource — embedded so the
+/// settings window can show the app logo without shipping a loose asset.
+const ICON_PNG: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../uvie-win/assets/uvie-icon.png"
+));
+
+/// App logo as a XAML Image. The PNG is extracted once into the config dir
+/// (next to settings.json) so `file:///` UriSource can load it —
+/// `InMemoryRandomAccessStream` isn't in our generated bindings.
+fn icon_image(state: &Shared, size: f64) -> R<Image> {
+    let img = Image::new()?;
+    img.SetWidth(size)?;
+    img.SetHeight(size)?;
+    img.SetStretch(Stretch::Uniform)?;
+    if let Some(dir) = state.settings_path.parent() {
+        let path = dir.join("uvie-icon.png");
+        if !path.exists() {
+            let _ = std::fs::write(&path, ICON_PNG);
+        }
+        let uri = format!("file:///{}", path.to_string_lossy().replace('\\', "/"));
+        if let Ok(u) = Uri::CreateUri(&HSTRING::from(uri)) {
+            let bmp = BitmapImage::new()?;
+            let _ = bmp.SetUriSource(&u);
+            let _ = img.SetSource(&bmp.cast::<ImageSource>()?);
+        }
+    }
+    Ok(img)
+}
+
+fn uniform_radius(v: f64) -> CornerRadius {
+    CornerRadius {
+        TopLeft: v,
+        TopRight: v,
+        BottomRight: v,
+        BottomLeft: v,
+    }
+}
+
+/// Rounded-square chip behind a row icon (Win11 Settings look).
+fn icon_chip(glyph: &str, chip_bg: &str, icon_fg: Option<&str>) -> R<Border> {
+    let chip = Border::new()?;
+    chip.SetWidth(32.0)?;
+    chip.SetHeight(32.0)?;
+    chip.SetCornerRadius(uniform_radius(8.0))?;
+    if let Some(b) = fill_or(&[chip_bg], "#0F000000") {
+        chip.SetBackground(&b)?;
+    }
+    let icon = font_icon(glyph, 15.0)?;
+    icon.SetHorizontalAlignment(HorizontalAlignment::Center)?;
+    icon.SetVerticalAlignment(VerticalAlignment::Center)?;
+    if let Some(fg) = icon_fg {
+        if let Some(b) = fill_or(&[fg], "#FFFFFFFF") {
+            icon.SetForeground(&b)?;
+        }
+    }
+    chip.SetChild(&icon)?;
+    Ok(chip)
+}
+
 fn card() -> R<Border> {
     let b = Border::new()?;
     b.SetCornerRadius(CornerRadius {
@@ -110,7 +221,7 @@ fn card() -> R<Border> {
         BottomRight: 8.0,
         BottomLeft: 8.0,
     })?;
-    if let Some(brush) = theme_brush("CardBackgroundFillColorDefaultBrush") {
+    if let Some(brush) = fill_or(&["CardBackgroundFillColorDefaultBrush"], "#B3FFFFFF") {
         b.SetBackground(&brush)?;
     }
     b.SetBorderThickness(Thickness {
@@ -119,7 +230,7 @@ fn card() -> R<Border> {
         Right: 1.0,
         Bottom: 1.0,
     })?;
-    if let Some(brush) = theme_brush("CardStrokeColorDefaultBrush") {
+    if let Some(brush) = fill_or(&["CardStrokeColorDefaultBrush"], "#0F000000") {
         b.SetBorderBrush(&brush)?;
     }
     let inner = StackPanel::new()?;
@@ -137,7 +248,14 @@ fn section_header(title: &str) -> R<TextBlock> {
     let t = TextBlock::new()?;
     t.SetText(&HSTRING::from(title.to_uppercase()))?;
     t.SetFontSize(11.0)?;
-    if let Some(brush) = theme_brush("TextFillColorSecondaryBrush") {
+    t.SetFontWeight(FontWeights::SemiBold()?)?;
+    t.SetMargin(Thickness {
+        Left: 2.0,
+        Top: 0.0,
+        Right: 0.0,
+        Bottom: 0.0,
+    })?;
+    if let Some(brush) = fill_or(&["TextFillColorSecondaryBrush"], "#8A000000") {
         t.SetForeground(&brush)?;
     }
     Ok(t)
@@ -147,12 +265,12 @@ fn divider() -> R<Border> {
     let b = Border::new()?;
     b.SetHeight(1.0)?;
     b.SetMargin(Thickness {
-        Left: 50.0,
+        Left: 60.0,
         Top: 0.0,
         Right: 0.0,
         Bottom: 0.0,
     })?;
-    if let Some(brush) = theme_brush("DividerStrokeColorDefaultBrush") {
+    if let Some(brush) = fill_or(&["DividerStrokeColorDefaultBrush"], "#0F000000") {
         b.SetBackground(&brush)?;
     }
     Ok(b)
@@ -166,7 +284,7 @@ fn text(s: &str, size: f64) -> R<TextBlock> {
 }
 
 fn secondary(t: &TextBlock) -> R<()> {
-    if let Some(brush) = theme_brush("TextFillColorSecondaryBrush") {
+    if let Some(brush) = fill_or(&["TextFillColorSecondaryBrush"], "#8A000000") {
         t.SetForeground(&brush)?;
     }
     Ok(())
@@ -226,36 +344,40 @@ fn thickness(v: f64) -> Thickness {
 // Row builders
 // ---------------------------------------------------------------------------
 
-/// icon + (title, description) + ToggleSwitch row — uvie-mac `SToggleRow`.
+/// icon-chip + (title, description) + ToggleSwitch row — uvie-mac `SToggleRow`.
 fn toggle_row<F>(card: &StackPanel, glyph: &str, title: &str, desc: &str, on: bool, f: F) -> R<()>
 where
     F: FnMut(bool) + Send + 'static,
 {
-    let row = grid(&[px(30.0), STAR, AUTO])?; // icon, text, toggle
+    let row = grid(&[px(46.0), STAR, AUTO])?; // chip, text, toggle
     row.SetPadding(Thickness {
         Left: 14.0,
-        Top: 11.0,
+        Top: 12.0,
         Right: 14.0,
-        Bottom: 11.0,
+        Bottom: 12.0,
     })?;
 
-    let icon = font_icon(glyph, 16.0)?;
-    icon.SetVerticalAlignment(VerticalAlignment::Center)?;
-    if let Some(brush) = theme_brush("TextFillColorSecondaryBrush") {
-        icon.SetForeground(&brush)?;
-    }
-    put(&row, 0, &icon)?;
+    let chip = icon_chip(glyph, "SubtleFillColorSecondaryBrush", None)?;
+    chip.SetVerticalAlignment(VerticalAlignment::Center)?;
+    put(&row, 0, &chip)?;
 
     let texts = StackPanel::new()?;
     texts.SetOrientation(Orientation::Vertical)?;
     texts.SetSpacing(2.0)?;
     let t = text(title, 13.0)?;
+    t.SetFontWeight(FontWeights::Medium()?)?;
     texts.Children()?.Append(&t)?;
-    let d = text(desc, 11.0)?;
+    let d = text(desc, 12.0)?;
     secondary(&d)?;
     d.SetTextWrapping(crate::bindings::Microsoft::UI::Xaml::TextWrapping::Wrap)?;
     texts.Children()?.Append(&d)?;
     texts.SetVerticalAlignment(VerticalAlignment::Center)?;
+    texts.SetPadding(Thickness {
+        Left: 0.0,
+        Top: 0.0,
+        Right: 12.0,
+        Bottom: 0.0,
+    })?;
     put(&row, 1, &texts)?;
 
     let toggle = ToggleSwitch::new()?;
@@ -273,26 +395,25 @@ where
     Ok(())
 }
 
-/// icon + (title, description) row with no control — informational.
+/// icon-chip + (title, description) row with no control — informational.
 fn info_row(card: &StackPanel, glyph: &str, title: &str, desc: &str) -> R<()> {
-    let row = grid(&[px(30.0), STAR])?;
+    let row = grid(&[px(46.0), STAR])?;
     row.SetPadding(Thickness {
         Left: 14.0,
-        Top: 11.0,
+        Top: 12.0,
         Right: 14.0,
-        Bottom: 11.0,
+        Bottom: 12.0,
     })?;
-    let icon = font_icon(glyph, 16.0)?;
-    icon.SetVerticalAlignment(VerticalAlignment::Center)?;
-    if let Some(brush) = theme_brush("TextFillColorSecondaryBrush") {
-        icon.SetForeground(&brush)?;
-    }
-    put(&row, 0, &icon)?;
+    let chip = icon_chip(glyph, "SubtleFillColorSecondaryBrush", None)?;
+    chip.SetVerticalAlignment(VerticalAlignment::Center)?;
+    put(&row, 0, &chip)?;
     let texts = StackPanel::new()?;
     texts.SetOrientation(Orientation::Vertical)?;
     texts.SetSpacing(2.0)?;
-    texts.Children()?.Append(&text(title, 13.0)?)?;
-    let d = text(desc, 11.0)?;
+    let t = text(title, 13.0)?;
+    t.SetFontWeight(FontWeights::Medium()?)?;
+    texts.Children()?.Append(&t)?;
+    let d = text(desc, 12.0)?;
     secondary(&d)?;
     d.SetTextWrapping(crate::bindings::Microsoft::UI::Xaml::TextWrapping::Wrap)?;
     texts.Children()?.Append(&d)?;
@@ -302,14 +423,40 @@ fn info_row(card: &StackPanel, glyph: &str, title: &str, desc: &str) -> R<()> {
     Ok(())
 }
 
-/// A pane: ScrollViewer > StackPanel of (caption + card) sections.
-fn pane() -> R<(ScrollViewer, StackPanel)> {
+/// A pane: ScrollViewer > page header + StackPanel of (caption + card) sections.
+fn pane(title: &str, subtitle: &str) -> R<(ScrollViewer, StackPanel)> {
     let scroll = ScrollViewer::new()?;
     scroll.SetVerticalScrollBarVisibility(ScrollBarVisibility::Auto)?;
     let stack = StackPanel::new()?;
     stack.SetOrientation(Orientation::Vertical)?;
-    stack.SetSpacing(22.0)?;
-    stack.SetMargin(thickness(24.0))?;
+    stack.SetSpacing(20.0)?;
+    stack.SetMaxWidth(880.0)?;
+    stack.SetMargin(Thickness {
+        Left: 36.0,
+        Top: 24.0,
+        Right: 36.0,
+        Bottom: 32.0,
+    })?;
+
+    let header = StackPanel::new()?;
+    header.SetOrientation(Orientation::Vertical)?;
+    header.SetSpacing(4.0)?;
+    header.SetMargin(Thickness {
+        Left: 2.0,
+        Top: 0.0,
+        Right: 0.0,
+        Bottom: 8.0,
+    })?;
+    let t = text(title, 26.0)?;
+    t.SetFontWeight(FontWeights::SemiBold()?)?;
+    header.Children()?.Append(&t)?;
+    if !subtitle.is_empty() {
+        let s = text(subtitle, 13.0)?;
+        secondary(&s)?;
+        header.Children()?.Append(&s)?;
+    }
+    stack.Children()?.Append(&header)?;
+
     scroll.SetContent(&stack)?;
     Ok((scroll, stack))
 }
@@ -362,7 +509,7 @@ fn dress_window() {
         if hwnd.0.is_null() {
             return;
         }
-        let _ = SetWindowPos(hwnd, None, 0, 0, 780, 600, SWP_NOMOVE | SWP_NOZORDER);
+        let _ = SetWindowPos(hwnd, None, 0, 0, 880, 640, SWP_NOMOVE | SWP_NOZORDER);
         if let Ok(hinst) = GetModuleHandleW(None) {
             if let Ok(icon) = LoadIconW(
                 Some(hinst.into()),
@@ -386,9 +533,42 @@ fn dress_window() {
     }
 }
 
+/// Root grid with a custom titlebar row + content row underneath.
+/// With `ExtendsContentIntoTitleBar` the strip behaves like Win11 Settings:
+/// icon + app name at the left, system caption buttons overlaid at the right.
+fn titlebar(state: &Shared) -> R<Grid> {
+    let bar = Grid::new()?;
+    bar.SetHeight(40.0)?;
+    let inner = StackPanel::new()?;
+    inner.SetOrientation(Orientation::Horizontal)?;
+    inner.SetSpacing(10.0)?;
+    inner.SetVerticalAlignment(VerticalAlignment::Center)?;
+    inner.SetMargin(Thickness {
+        Left: 14.0,
+        Top: 0.0,
+        Right: 148.0, // keep clear of the overlay caption buttons
+        Bottom: 0.0,
+    })?;
+    inner.Children()?.Append(&icon_image(state, 16.0)?)?;
+    let name = text("UVie for Windows", 12.0)?;
+    name.SetFontWeight(FontWeights::SemiBold()?)?;
+    name.SetVerticalAlignment(VerticalAlignment::Center)?;
+    inner.Children()?.Append(&name)?;
+    bar.Children()?.Append(&inner)?;
+    Ok(bar)
+}
+
 fn show_window(state: Shared) -> R<()> {
     let window = Window::new()?;
     window.SetTitle(&HSTRING::from("UVie for Windows"))?;
+
+    // Mica + content under the caption area — both degrade gracefully.
+    let _ = window.SetExtendsContentIntoTitleBar(true);
+    if let Ok(mica) = MicaBackdrop::new() {
+        if let Ok(backdrop) = mica.cast::<SystemBackdrop>() {
+            let _ = window.SetSystemBackdrop(&backdrop);
+        }
+    }
 
     let tabs: &[(&str, &str, &str)] = &[
         ("general", "Tổng quan", glyph::SETTINGS),
@@ -406,7 +586,7 @@ fn show_window(state: Shared) -> R<()> {
         macro_pane(&state)?,
         apps_pane(&state)?,
         advanced_pane(&state)?,
-        about_pane()?,
+        about_pane(&state)?,
     ];
     let content = Grid::new()?;
     for (i, p) in panes.iter().enumerate() {
@@ -421,8 +601,11 @@ fn show_window(state: Shared) -> R<()> {
     // -- sidebar (hand-rolled: NavigationView's template fast-fails on
     //    WASDK 1.6 / Server 2022; a Border + Buttons gives the same look) ----
     let side = Border::new()?;
-    side.SetWidth(208.0)?;
-    if let Some(b) = theme_brush("CardBackgroundFillColorSecondaryBrush") {
+    side.SetWidth(224.0)?;
+    if let Some(b) = theme_brush_any(&[
+        "LayerFillColorDefaultBrush",
+        "CardBackgroundFillColorSecondaryBrush",
+    ]) {
         side.SetBackground(&b)?;
     }
     side.SetBorderThickness(Thickness {
@@ -431,57 +614,154 @@ fn show_window(state: Shared) -> R<()> {
         Right: 1.0,
         Bottom: 0.0,
     })?;
-    if let Some(b) = theme_brush("DividerStrokeColorDefaultBrush") {
+    if let Some(b) = fill_or(&["DividerStrokeColorDefaultBrush"], "#0F000000") {
         side.SetBorderBrush(&b)?;
     }
+
+    // Sidebar grid: [AUTO logo header][STAR nav items][AUTO version footer].
+    let side_grid = Grid::new()?;
+    {
+        let r0 = RowDefinition::new()?;
+        r0.SetHeight(AUTO)?;
+        let r1 = RowDefinition::new()?;
+        r1.SetHeight(STAR)?;
+        let r2 = RowDefinition::new()?;
+        r2.SetHeight(AUTO)?;
+        side_grid.RowDefinitions()?.Append(&r0)?;
+        side_grid.RowDefinitions()?.Append(&r1)?;
+        side_grid.RowDefinitions()?.Append(&r2)?;
+    }
+
+    // Logo header.
+    let brand = StackPanel::new()?;
+    brand.SetOrientation(Orientation::Horizontal)?;
+    brand.SetSpacing(10.0)?;
+    brand.SetMargin(Thickness {
+        Left: 14.0,
+        Top: 12.0,
+        Right: 0.0,
+        Bottom: 14.0,
+    })?;
+    brand.Children()?.Append(&icon_image(&state, 26.0)?)?;
+    let brand_text = StackPanel::new()?;
+    brand_text.SetOrientation(Orientation::Vertical)?;
+    brand_text.SetSpacing(1.0)?;
+    brand_text.SetVerticalAlignment(VerticalAlignment::Center)?;
+    let bt = text("UVie", 15.0)?;
+    bt.SetFontWeight(FontWeights::SemiBold()?)?;
+    brand_text.Children()?.Append(&bt)?;
+    let bs = text("Tiếng Việt", 11.0)?;
+    secondary(&bs)?;
+    brand_text.Children()?.Append(&bs)?;
+    brand.Children()?.Append(&brand_text)?;
+    Grid::SetRow(&brand, 0)?;
+    side_grid.Children()?.Append(&brand)?;
+
+    // Nav items.
     let side_stack = StackPanel::new()?;
     side_stack.SetSpacing(2.0)?;
     side_stack.SetMargin(Thickness {
-        Left: 8.0,
-        Top: 8.0,
-        Right: 8.0,
+        Left: 10.0,
+        Top: 0.0,
+        Right: 10.0,
         Bottom: 8.0,
     })?;
 
-    let header = TextBlock::new()?;
-    header.SetText(&HSTRING::from("UVie"))?;
-    header.SetFontSize(20.0)?;
-    header.SetFontWeight(FontWeights::SemiBold()?)?;
-    header.SetMargin(Thickness {
-        Left: 10.0,
-        Top: 8.0,
-        Right: 0.0,
-        Bottom: 16.0,
-    })?;
-    side_stack.Children()?.Append(&header)?;
-
+    let selected = Arc::new(AtomicUsize::new(0));
     let mut buttons: Vec<Button> = Vec::new();
-    for (_, label, g) in tabs {
+    let mut pills: Vec<Border> = Vec::new();
+    for (i, (_, label, g)) in tabs.iter().enumerate() {
+        // Cell = nav button with an accent pill overlaid at its left edge.
+        let cell = Grid::new()?;
         let btn = Button::new()?;
-        let row = grid(&[px(30.0), STAR])?;
+        let row = grid(&[px(32.0), STAR])?;
         let ic = font_icon(g, 15.0)?;
         ic.SetVerticalAlignment(VerticalAlignment::Center)?;
         ic.SetHorizontalAlignment(HorizontalAlignment::Center)?;
         put(&row, 0, &ic)?;
         let tb = text(label, 13.0)?;
         tb.SetVerticalAlignment(VerticalAlignment::Center)?;
+        if i == 0 {
+            tb.SetFontWeight(FontWeights::SemiBold()?)?;
+        }
         put(&row, 1, &tb)?;
         btn.SetContent(&row)?;
         btn.SetHorizontalAlignment(HorizontalAlignment::Stretch)?;
         btn.SetHorizontalContentAlignment(HorizontalAlignment::Left)?;
-        if let Some(b) = theme_brush("ControlFillColorTransparentBrush") {
+        if let Some(b) = fill_or(&["ControlFillColorTransparentBrush"], "Transparent") {
             btn.SetBackground(&b)?;
         }
-        side_stack.Children()?.Append(&btn)?;
-        buttons.push(btn);
-    }
-    side.SetChild(&side_stack)?;
+        cell.Children()?.Append(&btn.cast::<UIElement>()?)?;
 
-    // Click → swap visible pane + selection highlight.
+        let pill = Border::new()?;
+        pill.SetWidth(3.0)?;
+        pill.SetHeight(18.0)?;
+        pill.SetCornerRadius(uniform_radius(1.5))?;
+        pill.SetHorizontalAlignment(HorizontalAlignment::Left)?;
+        pill.SetVerticalAlignment(VerticalAlignment::Center)?;
+        pill.SetMargin(Thickness {
+            Left: 0.0,
+            Top: 0.0,
+            Right: 0.0,
+            Bottom: 0.0,
+        })?;
+        pill.SetOpacity(if i == 0 { 1.0 } else { 0.0 })?;
+        pill.SetIsHitTestVisible(false)?;
+        if let Some(b) = accent_brush() {
+            pill.SetBackground(&b)?;
+        }
+        cell.Children()?.Append(&pill.cast::<UIElement>()?)?;
+
+        side_stack.Children()?.Append(&cell)?;
+        buttons.push(btn);
+        pills.push(pill);
+    }
+    Grid::SetRow(&side_stack, 1)?;
+    side_grid.Children()?.Append(&side_stack)?;
+
+    // Version footer.
+    let footer = StackPanel::new()?;
+    footer.SetOrientation(Orientation::Vertical)?;
+    footer.SetSpacing(1.0)?;
+    footer.SetMargin(Thickness {
+        Left: 16.0,
+        Top: 0.0,
+        Right: 0.0,
+        Bottom: 12.0,
+    })?;
+    let fv = text(&format!("Phiên bản {}", env!("CARGO_PKG_VERSION")), 11.0)?;
+    secondary(&fv)?;
+    footer.Children()?.Append(&fv)?;
+    let fe = text("Powered by uvie-rs", 11.0)?;
+    secondary(&fe)?;
+    footer.Children()?.Append(&fe)?;
+    Grid::SetRow(&footer, 2)?;
+    side_grid.Children()?.Append(&footer)?;
+
+    side.SetChild(&side_grid)?;
+
+    // Nav interactions: click selects (pane swap + pill + fill), hover tints.
+    let nav_fill = |i: usize, buttons: &[Button], pills: &[Border]| -> R<()> {
+        for (j, b) in buttons.iter().enumerate() {
+            let brush = if j == i {
+                fill_or(&["SubtleFillColorSecondaryBrush"], "#0F000000")
+            } else {
+                brush_from_str("Transparent")
+            };
+            if let Some(brush) = brush {
+                b.SetBackground(&brush)?;
+            }
+            pills[j].SetOpacity(if j == i { 1.0 } else { 0.0 })?;
+        }
+        Ok(())
+    };
     for (i, btn) in buttons.iter().enumerate() {
         let panes_c = panes.clone();
         let buttons_c = buttons.clone();
+        let pills_c = pills.clone();
+        let selected_c = selected.clone();
         btn.Click(&RoutedEventHandler::new(move |_, _| {
+            selected_c.store(i, Ordering::Relaxed);
             for (j, p) in panes_c.iter().enumerate() {
                 p.SetVisibility(if j == i {
                     Visibility::Visible
@@ -489,28 +769,53 @@ fn show_window(state: Shared) -> R<()> {
                     Visibility::Collapsed
                 })?;
             }
-            for (j, b) in buttons_c.iter().enumerate() {
-                let key = if j == i {
-                    "SubtleFillColorSecondaryBrush"
-                } else {
-                    "ControlFillColorTransparentBrush"
-                };
-                if let Some(brush) = theme_brush(key) {
-                    b.SetBackground(&brush)?;
+            nav_fill(i, &buttons_c, &pills_c)
+        }))?;
+
+        let buttons_e = buttons.clone();
+        let selected_e = selected.clone();
+        btn.PointerEntered(&PointerEventHandler::new(move |_, _| {
+            if selected_e.load(Ordering::Relaxed) != i {
+                if let Some(brush) = fill_or(&["SubtleFillColorTertiaryBrush"], "#08000000") {
+                    buttons_e[i].SetBackground(&brush)?;
                 }
             }
             Ok(())
         }))?;
+        let buttons_x = buttons.clone();
+        let pills_x = pills.clone();
+        let selected_x = selected.clone();
+        btn.PointerExited(&PointerEventHandler::new(move |_, _| {
+            nav_fill(selected_x.load(Ordering::Relaxed), &buttons_x, &pills_x)
+        }))?;
     }
-    if let Some(brush) = theme_brush("SubtleFillColorSecondaryBrush") {
-        buttons[0].SetBackground(&brush)?;
-    }
+    nav_fill(0, &buttons, &pills)?;
 
-    let root = grid(&[px(208.0), STAR])?;
-    put(&root, 0, &side)?;
-    put(&root, 1, &content)?;
+    // -- root: [AUTO titlebar][STAR (sidebar | content)] ----------------------
+    let root = Grid::new()?;
+    {
+        let r0 = RowDefinition::new()?;
+        r0.SetHeight(AUTO)?;
+        let r1 = RowDefinition::new()?;
+        r1.SetHeight(STAR)?;
+        root.RowDefinitions()?.Append(&r0)?;
+        root.RowDefinitions()?.Append(&r1)?;
+    }
+    let bar = titlebar(&state)?;
+    Grid::SetRow(&bar, 0)?;
+    root.Children()?.Append(&bar)?;
+
+    let main = grid(&[px(224.0), STAR])?;
+    put(&main, 0, &side)?;
+    put(&main, 1, &content)?;
+    Grid::SetRow(&main, 1)?;
+    root.Children()?.Append(&main)?;
 
     window.SetContent(&root)?;
+    // Mark the strip as the drag region (after content is set, per docs).
+    if let Ok(uie) = bar.cast::<UIElement>() {
+        let _ = window.SetTitleBar(&uie);
+    }
     window.Activate()?;
     dress_window();
     Ok(())
@@ -521,29 +826,45 @@ fn show_window(state: Shared) -> R<()> {
 // ---------------------------------------------------------------------------
 
 fn general_pane(state: &Shared) -> R<ScrollViewer> {
-    let (scroll, stack) = pane()?;
+    let (scroll, stack) = pane(
+        "Tổng quan",
+        "Kiểm soát cách UVie gõ Tiếng Việt trong mọi ứng dụng",
+    )?;
 
     // Engine master toggle — the big "Tiếng Việt / English" card.
     {
         let c = card()?;
         let inner = card_stack(&c)?;
-        let row = grid(&[px(44.0), STAR, AUTO])?;
+        let row = grid(&[px(50.0), STAR, AUTO])?;
         row.SetPadding(Thickness {
             Left: 16.0,
-            Top: 14.0,
+            Top: 16.0,
             Right: 16.0,
-            Bottom: 14.0,
+            Bottom: 16.0,
         })?;
-        let icon = font_icon(glyph::KEYBOARD, 22.0)?;
-        icon.SetVerticalAlignment(VerticalAlignment::Center)?;
-        put(&row, 0, &icon)?;
+        let chip = Border::new()?;
+        chip.SetWidth(36.0)?;
+        chip.SetHeight(36.0)?;
+        chip.SetCornerRadius(uniform_radius(8.0))?;
+        if let Some(b) = accent_brush() {
+            chip.SetBackground(&b)?;
+        }
+        let chip_icon = font_icon(glyph::KEYBOARD, 17.0)?;
+        chip_icon.SetHorizontalAlignment(HorizontalAlignment::Center)?;
+        chip_icon.SetVerticalAlignment(VerticalAlignment::Center)?;
+        if let Some(b) = fill_or(&["TextOnAccentFillColorPrimaryBrush"], "#FFFFFFFF") {
+            chip_icon.SetForeground(&b)?;
+        }
+        chip.SetChild(&chip_icon)?;
+        chip.SetVerticalAlignment(VerticalAlignment::Center)?;
+        put(&row, 0, &chip)?;
         let texts = StackPanel::new()?;
         texts.SetOrientation(Orientation::Vertical)?;
         texts.SetSpacing(3.0)?;
-        texts
-            .Children()?
-            .Append(&text("Tiếng Việt (UVie)", 14.0)?)?;
-        let d = text("Bộ gõ Tiếng Việt cho Windows", 11.0)?;
+        let title = text("Tiếng Việt (UVie)", 15.0)?;
+        title.SetFontWeight(FontWeights::SemiBold()?)?;
+        texts.Children()?.Append(&title)?;
+        let d = text("Bộ gõ Tiếng Việt cho Windows", 12.0)?;
         secondary(&d)?;
         texts.Children()?.Append(&d)?;
         texts.SetVerticalAlignment(VerticalAlignment::Center)?;
@@ -565,9 +886,31 @@ fn general_pane(state: &Shared) -> R<ScrollViewer> {
         stack.Children()?.Append(&c)?;
     }
 
-    // Input method — segmented-style radio group.
+    // Input method — labeled row with the picker on the right.
     {
         let inner = section(&stack, "Bảng mã gõ")?;
+        let row = grid(&[px(46.0), STAR, AUTO])?;
+        row.SetPadding(Thickness {
+            Left: 14.0,
+            Top: 12.0,
+            Right: 14.0,
+            Bottom: 12.0,
+        })?;
+        let chip = icon_chip(glyph::KEYBOARD, "SubtleFillColorSecondaryBrush", None)?;
+        chip.SetVerticalAlignment(VerticalAlignment::Center)?;
+        put(&row, 0, &chip)?;
+        let texts = StackPanel::new()?;
+        texts.SetOrientation(Orientation::Vertical)?;
+        texts.SetSpacing(2.0)?;
+        let t = text("Kiểu gõ", 13.0)?;
+        t.SetFontWeight(FontWeights::Medium()?)?;
+        texts.Children()?.Append(&t)?;
+        let d = text("Chọn Telex, VNI hoặc Simple Telex", 12.0)?;
+        secondary(&d)?;
+        texts.Children()?.Append(&d)?;
+        texts.SetVerticalAlignment(VerticalAlignment::Center)?;
+        put(&row, 1, &texts)?;
+
         let combo = ComboBox::new()?;
         for name in ["Telex", "VNI", "Simple Telex"] {
             let item = ComboBoxItem::new()?;
@@ -597,10 +940,11 @@ fn general_pane(state: &Shared) -> R<ScrollViewer> {
                 ),
             )?;
         }
-        combo.SetHorizontalAlignment(HorizontalAlignment::Left)?;
-        combo.SetMinWidth(220.0)?;
-        combo.SetMargin(thickness(14.0))?;
-        inner.Children()?.Append(&combo)?;
+        combo.SetHorizontalAlignment(HorizontalAlignment::Right)?;
+        combo.SetVerticalAlignment(VerticalAlignment::Center)?;
+        combo.SetMinWidth(180.0)?;
+        put(&row, 2, &combo)?;
+        inner.Children()?.Append(&row)?;
     }
 
     // Smart switching.
@@ -669,7 +1013,7 @@ fn general_pane(state: &Shared) -> R<ScrollViewer> {
 }
 
 fn keyboard_pane(state: &Shared) -> R<ScrollViewer> {
-    let (scroll, stack) = pane()?;
+    let (scroll, stack) = pane("Bàn phím", "Tuỳ chọn kiểu gõ và hành vi bàn phím")?;
 
     let inner = section(&stack, "Vần cuối")?;
     {
@@ -707,7 +1051,7 @@ fn keyboard_pane(state: &Shared) -> R<ScrollViewer> {
 }
 
 fn macro_pane(state: &Shared) -> R<ScrollViewer> {
-    let (scroll, stack) = pane()?;
+    let (scroll, stack) = pane("Macro", "Gõ viết tắt, mở rộng thành văn bản đầy đủ")?;
 
     {
         let inner = section(&stack, "Macro văn bản")?;
@@ -759,6 +1103,7 @@ fn macro_pane(state: &Shared) -> R<ScrollViewer> {
         add.SetContent(&PropertyValue::CreateString(&HSTRING::from(
             "＋ Thêm macro",
         ))?)?;
+        apply_style(&add, "AccentButtonStyle");
         add.SetHorizontalAlignment(HorizontalAlignment::Left)?;
         add.SetMargin(Thickness {
             Left: 0.0,
@@ -883,6 +1228,7 @@ fn app_list_card(
 
     let add = Button::new()?;
     add.SetContent(&PropertyValue::CreateString(&HSTRING::from("＋ Thêm…"))?)?;
+    apply_style(&add, "AccentButtonStyle");
     {
         let state_c = state.clone();
         let list_c = list.clone();
@@ -998,7 +1344,7 @@ fn rebuild_app_list(
 }
 
 fn apps_pane(state: &Shared) -> R<ScrollViewer> {
-    let (scroll, stack) = pane()?;
+    let (scroll, stack) = pane("Ứng dụng", "Quản lý app loại trừ và tương thích gõ")?;
 
     app_list_card(
         &stack,
@@ -1024,7 +1370,7 @@ fn apps_pane(state: &Shared) -> R<ScrollViewer> {
 }
 
 fn advanced_pane(state: &Shared) -> R<ScrollViewer> {
-    let (scroll, stack) = pane()?;
+    let (scroll, stack) = pane("Nâng cao", "Tuỳ chọn nâng cao và lưu ý khi sử dụng")?;
 
     let inner = section(&stack, "Ngôn ngữ")?;
     {
@@ -1089,28 +1435,42 @@ fn advanced_pane(state: &Shared) -> R<ScrollViewer> {
     Ok(scroll)
 }
 
-fn about_pane() -> R<ScrollViewer> {
-    let (scroll, stack) = pane()?;
+fn about_pane(state: &Shared) -> R<ScrollViewer> {
+    let (scroll, stack) = pane("Giới thiệu", "Về UVie for Windows")?;
 
     let center = StackPanel::new()?;
     center.SetOrientation(Orientation::Vertical)?;
-    center.SetSpacing(16.0)?;
+    center.SetSpacing(14.0)?;
     center.SetHorizontalAlignment(HorizontalAlignment::Center)?;
     center.SetMargin(Thickness {
         Left: 0.0,
-        Top: 48.0,
+        Top: 40.0,
         Right: 0.0,
         Bottom: 0.0,
     })?;
 
-    let title = text("UVie for Windows", 26.0)?;
+    center.Children()?.Append(&icon_image(state, 72.0)?)?;
+
+    let title = text("UVie for Windows", 24.0)?;
+    title.SetFontWeight(FontWeights::SemiBold()?)?;
     title.SetHorizontalAlignment(HorizontalAlignment::Center)?;
     center.Children()?.Append(&title)?;
 
-    let version = text("Phiên bản 0.1.0", 13.0)?;
-    secondary(&version)?;
-    version.SetHorizontalAlignment(HorizontalAlignment::Center)?;
-    center.Children()?.Append(&version)?;
+    // Version badge — rounded accent-tinted pill.
+    let badge = Border::new()?;
+    badge.SetCornerRadius(uniform_radius(12.0))?;
+    badge.SetPadding(Thickness {
+        Left: 12.0,
+        Top: 4.0,
+        Right: 12.0,
+        Bottom: 4.0,
+    })?;
+    if let Some(b) = fill_or(&["AccentFillColorSecondaryBrush"], "#1A0067C0") {
+        badge.SetBackground(&b)?;
+    }
+    let badge_text = text(&format!("v{}", env!("CARGO_PKG_VERSION")), 12.0)?;
+    badge.SetChild(&badge_text)?;
+    center.Children()?.Append(&badge)?;
 
     let desc = text(
         "Bộ gõ Tiếng Việt nhanh, nhẹ và chính xác cho Windows.\nPowered by uvie-rs — zero-cost Rust engine.",
@@ -1124,7 +1484,13 @@ fn about_pane() -> R<ScrollViewer> {
     // Footer links.
     let links = StackPanel::new()?;
     links.SetOrientation(Orientation::Horizontal)?;
-    links.SetSpacing(24.0)?;
+    links.SetSpacing(10.0)?;
+    links.SetMargin(Thickness {
+        Left: 0.0,
+        Top: 8.0,
+        Right: 0.0,
+        Bottom: 0.0,
+    })?;
     links.SetHorizontalAlignment(HorizontalAlignment::Center)?;
     for (label, url) in [
         ("GitHub", "https://github.com/uvie-project/uvie-win"),
