@@ -394,7 +394,7 @@ fn engine_macro_table_load_missing_file_is_empty() {
     assert!(t.lookup("sg").is_none());
 }
 
-// MARK: - v3.1.3 cross-word-rewrite pin regressions
+// MARK: - v3.1.4 cross-word-rewrite pin regressions
 
 /// Feed one key through the dispatcher, apply its plan to `screen` and push
 /// the passed-through char for Pass dispatches. Returns the plan.
@@ -426,12 +426,17 @@ fn feed_str(d: &mut Dispatcher, screen: &mut String, text: &str) {
 }
 
 /// A passed Backspace deletes one char natively on the app side.
-fn feed_backspace(d: &mut Dispatcher, screen: &mut String) {
+/// Returns the plan so tests can inspect it.
+fn feed_backspace(d: &mut Dispatcher, screen: &mut String) -> Vec<InputAction> {
     match d.handle(KeyEvent::backspace(), &Context::default()) {
-        Dispatch::Consume(plan) => apply(screen, &plan),
+        Dispatch::Consume(plan) => {
+            apply(screen, &plan);
+            plan
+        }
         Dispatch::Pass(plan) => {
             apply(screen, &plan);
             screen.pop();
+            plan
         }
     }
 }
@@ -461,16 +466,60 @@ fn pin_regression_overflowed_word_contraction() {
 
 #[test]
 fn pin_regression_comma_survives_separator_delete() {
-    // "this, " losing the space leaves "this,": the comma is a mixed-gap
-    // leftover, so no rewrite may replace it. "thí" stays Vietnamese
-    // because its separator is unknowable (typing the comma directly knows
-    // it and restores "this").
+    // "this, " losing the space at the end of the gap is an exact undo:
+    // the ',' separator stays known, so the retro fix restores "this"
+    // across it - the same text typing "this,is a test " produces.
     let mut d = dispatcher();
     let mut screen = String::new();
     feed_str(&mut d, &mut screen, "this, ");
     feed_backspace(&mut d, &mut screen);
     feed_str(&mut d, &mut screen, "is a test ");
-    assert_eq!(screen, "thí,is a test ");
+    assert_eq!(screen, "this,is a test ");
+}
+
+#[test]
+fn pin_regression_control_gap_backspace_goes_native() {
+    // "chao" + Enter, then the chat app sent the line and cleared the
+    // field: the '\n' gap's geometry is unconfirmed, so the Backspace must
+    // go native - not undo the Enter and arm edits on the sent word.
+    let mut d = dispatcher();
+    let mut screen = String::new();
+    feed_str(&mut d, &mut screen, "chao");
+    feed_key(&mut d, &mut screen, KeyEvent::enter(), Some('\n'));
+    screen.clear();
+    let mut typed = 0usize;
+    let plan = feed_backspace(&mut d, &mut screen);
+    for action in &plan {
+        if let InputAction::Backspace(n) = action {
+            assert!(*n <= typed, "plan {plan:?}");
+        }
+    }
+    for ch in "sao ".chars() {
+        let plan = feed_key(&mut d, &mut screen, KeyEvent::char(ch), Some(ch));
+        for action in &plan {
+            if let InputAction::Backspace(n) = action {
+                assert!(*n <= typed, "plan {plan:?} at {ch:?}");
+            }
+        }
+        typed += 1;
+    }
+    // Whatever a fresh engine produces for the same draft: the sent text
+    // must play no role in it.
+    let mut fresh = dispatcher();
+    assert_eq!(screen, replay(&mut fresh, "sao "));
+}
+
+#[test]
+fn pin_regression_separator_delete_undoes_code_dot() {
+    // Deleting the '.' must also undo the code-token state it created; on a
+    // no-rewrite host the next word renders as Vietnamese again.
+    let mut d = dispatcher();
+    d.edit_committed = false;
+    let mut screen = String::new();
+    feed_str(&mut d, &mut screen, "chaof.");
+    feed_backspace(&mut d, &mut screen);
+    feed_str(&mut d, &mut screen, "dduwowcj ");
+    assert_eq!(screen, "chàođược ");
 }
 
 #[test]
