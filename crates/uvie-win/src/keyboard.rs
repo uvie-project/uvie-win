@@ -311,3 +311,49 @@ fn sync_modifiers(state: &mut [u8; 256]) {
         state[VK_CAPITAL.0 as usize] &= !0x01;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_modifier_vk_covers_modifier_ranges_only() {
+        // VK_SHIFT..VK_MENU (0x10-0x12)
+        assert!(!is_modifier_vk(0x0F));
+        for vk in 0x10..=0x12 {
+            assert!(is_modifier_vk(vk), "vk {vk:#04X}");
+        }
+        assert!(!is_modifier_vk(0x13));
+        // VK_LWIN / VK_RWIN
+        assert!(is_modifier_vk(0x5B));
+        assert!(is_modifier_vk(0x5C));
+        assert!(!is_modifier_vk(0x5A)); // VK_Z is not a modifier
+        assert!(!is_modifier_vk(0x5D));
+        // VK_LSHIFT..VK_RMENU (0xA0-0xA5)
+        assert!(!is_modifier_vk(0x9F));
+        for vk in 0xA0..=0xA5 {
+            assert!(is_modifier_vk(vk), "vk {vk:#04X}");
+        }
+        assert!(!is_modifier_vk(0xA6));
+        // Ordinary keys are never modifiers.
+        for vk in [0x41, 0x30, 0x20, 0x0D, 0x70] {
+            assert!(!is_modifier_vk(vk), "vk {vk:#04X}");
+        }
+    }
+
+    // These call real Win32 locale APIs; they only execute on Windows CI.
+    #[test]
+    fn langid_is_non_latin_known_langids() {
+        // en-US reports "Latn;" -> Latin -> IME enabled.
+        assert!(!langid_is_non_latin(0x0409));
+        // ru-RU reports "Cyrl;" -> non-Latin -> pass-through.
+        assert!(langid_is_non_latin(0x0419));
+    }
+
+    #[test]
+    fn langid_is_non_latin_unknown_langid_defaults_to_latin() {
+        // A bogus LANGID fails LCIDToLocaleName -> treated as Latin (the
+        // documented failure direction).
+        assert!(!langid_is_non_latin(0xFFFF));
+    }
+}

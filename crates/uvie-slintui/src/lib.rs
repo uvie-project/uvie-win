@@ -418,3 +418,57 @@ fn open_url(url: &str) {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uvie_core::settings::Hotkey;
+
+    #[test]
+    fn hotkey_label_lists_modifiers_in_ctrl_alt_shift_order() {
+        let h = Hotkey {
+            ctrl: true,
+            alt: false,
+            shift: true,
+            vk: 0x5A,
+        };
+        assert_eq!(hotkey_label(&h), "Ctrl + Shift + Z");
+        let h = Hotkey {
+            ctrl: true,
+            alt: true,
+            shift: false,
+            vk: 0x30,
+        };
+        assert_eq!(hotkey_label(&h), "Ctrl + Alt + 0");
+        let h = Hotkey {
+            ctrl: false,
+            alt: false,
+            shift: false,
+            vk: 0x70,
+        };
+        assert_eq!(hotkey_label(&h), "F1");
+    }
+
+    #[test]
+    fn vk_name_covers_named_and_numeric_ranges() {
+        assert_eq!(vk_name(0x41), "A");
+        assert_eq!(vk_name(0x5A), "Z");
+        assert_eq!(vk_name(0x30), "0");
+        assert_eq!(vk_name(0x39), "9");
+        assert_eq!(vk_name(0x70), "F1");
+        assert_eq!(vk_name(0x87), "F24");
+        for (vk, want) in [
+            (0x20, "Space"),
+            (0x09, "Tab"),
+            (0x0D, "Enter"),
+            (0x1B, "Esc"),
+            (0x08, "Backspace"),
+            (0x2E, "Delete"),
+        ] {
+            assert_eq!(vk_name(vk), want, "vk {vk:#04X}");
+        }
+        // Unmapped codes fall back to hex.
+        assert_eq!(vk_name(0x10), "0x10");
+        assert_eq!(vk_name(0xFF), "0xFF");
+    }
+}

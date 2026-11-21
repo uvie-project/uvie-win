@@ -293,3 +293,50 @@ unsafe fn show_menu(hwnd: HWND) {
     let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
     let _ = DestroyMenu(menu);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hotkey_modifiers_always_sets_norepeat() {
+        let h = Hotkey {
+            ctrl: false,
+            alt: false,
+            shift: false,
+            vk: 0x5A,
+        };
+        assert_eq!(hotkey_modifiers(&h), MOD_NOREPEAT);
+    }
+
+    #[test]
+    fn hotkey_modifiers_maps_each_flag() {
+        for (ctrl, alt, shift, want) in [
+            (true, false, false, MOD_NOREPEAT | MOD_CONTROL),
+            (false, true, false, MOD_NOREPEAT | MOD_ALT),
+            (false, false, true, MOD_NOREPEAT | MOD_SHIFT),
+            (
+                true,
+                true,
+                true,
+                MOD_NOREPEAT | MOD_CONTROL | MOD_ALT | MOD_SHIFT,
+            ),
+        ] {
+            let h = Hotkey {
+                ctrl,
+                alt,
+                shift,
+                vk: 0x5A,
+            };
+            assert_eq!(hotkey_modifiers(&h), want, "{ctrl} {alt} {shift}");
+        }
+    }
+
+    #[test]
+    fn hotkey_modifiers_default_chord_is_ctrl_shift() {
+        assert_eq!(
+            hotkey_modifiers(&Hotkey::default()),
+            MOD_NOREPEAT | MOD_CONTROL | MOD_SHIFT
+        );
+    }
+}
