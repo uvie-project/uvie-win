@@ -393,3 +393,132 @@ fn engine_macro_table_load_missing_file_is_empty() {
     let t = MacroTable::load(&temp_path("no-macros.json"));
     assert!(t.lookup("sg").is_none());
 }
+
+// MARK: - v3.1.3 cross-word-rewrite pin regressions
+
+/// Feed one key through the dispatcher, apply its plan to `screen` and push
+/// the passed-through char for Pass dispatches. Returns the plan.
+fn feed_key(
+    d: &mut Dispatcher,
+    screen: &mut String,
+    key: KeyEvent,
+    pass: Option<char>,
+) -> Vec<InputAction> {
+    match d.handle(key, &Context::default()) {
+        Dispatch::Consume(plan) => {
+            apply(screen, &plan);
+            plan
+        }
+        Dispatch::Pass(plan) => {
+            apply(screen, &plan);
+            if let Some(c) = pass {
+                screen.push(c);
+            }
+            plan
+        }
+    }
+}
+
+fn feed_str(d: &mut Dispatcher, screen: &mut String, text: &str) {
+    for ch in text.chars() {
+        feed_key(d, screen, KeyEvent::char(ch), Some(ch));
+    }
+}
+
+/// A passed Backspace deletes one char natively on the app side.
+fn feed_backspace(d: &mut Dispatcher, screen: &mut String) {
+    match d.handle(KeyEvent::backspace(), &Context::default()) {
+        Dispatch::Consume(plan) => apply(screen, &plan),
+        Dispatch::Pass(plan) => {
+            apply(screen, &plan);
+            screen.pop();
+        }
+    }
+}
+
+#[test]
+fn pin_regression_apostrophe_deleted_keeps_vietnamese() {
+    // "vieetj '" then Backspace drops the apostrophe: the surviving
+    // separator is unknowable, so 's' must not read as a contraction.
+    let mut d = dispatcher();
+    let mut screen = String::new();
+    feed_str(&mut d, &mut screen, "vieetj '");
+    feed_backspace(&mut d, &mut screen);
+    feed_str(&mut d, &mut screen, "s ");
+    assert_eq!(screen, "việt s ");
+}
+
+#[test]
+fn pin_regression_overflowed_word_contraction() {
+    // A word longer than the 24-key raw buffer only knows its tail; the
+    // contraction rewrite must not rebuild it.
+    let mut d = dispatcher();
+    assert_eq!(
+        replay(&mut d, "getCurrentApplicationSettings's "),
+        "getCurrentApplicationSettings's "
+    );
+}
+
+#[test]
+fn pin_regression_comma_survives_separator_delete() {
+    // "this, " losing the space leaves "this,": the comma is a mixed-gap
+    // leftover, so no rewrite may replace it. "thí" stays Vietnamese
+    // because its separator is unknowable (typing the comma directly knows
+    // it and restores "this").
+    let mut d = dispatcher();
+    let mut screen = String::new();
+    feed_str(&mut d, &mut screen, "this, ");
+    feed_backspace(&mut d, &mut screen);
+    feed_str(&mut d, &mut screen, "is a test ");
+    assert_eq!(screen, "thí,is a test ");
+}
+
+#[test]
+fn pin_regression_enter_never_rewrites_across_line() {
+    let mut d = dispatcher();
+    let mut screen = String::new();
+    feed_str(&mut d, &mut screen, "this");
+    feed_key(&mut d, &mut screen, KeyEvent::enter(), Some('\n'));
+    feed_str(&mut d, &mut screen, "test");
+    let plan = feed_key(&mut d, &mut screen, KeyEvent::char(' '), Some(' '));
+    for action in &plan {
+        match action {
+            // "test" renders at most 4 screen chars; a larger erase reaches
+            // past the newline into the previous line.
+            InputAction::Backspace(n) => assert!(*n <= 4, "plan {plan:?}"),
+            InputAction::Text(t) => assert!(!t.contains('\n'), "plan {plan:?}"),
+            _ => {}
+        }
+    }
+    assert_eq!(screen.lines().next_back().unwrap(), "test ");
+}
+
+#[test]
+fn pin_regression_edit_committed_off_bounds_backspaces() {
+    let mut d = dispatcher();
+    // ibus/fcitx-style host: committed text cannot be rewritten.
+    d.edit_committed = false;
+    let mut screen = String::new();
+    let mut word_len = 0usize;
+    for ch in "this is a test ".chars() {
+        let plan = feed_key(&mut d, &mut screen, KeyEvent::char(ch), Some(ch));
+        for action in &plan {
+            if let InputAction::Backspace(n) = action {
+                // No plan may erase past the word typed so far.
+                assert!(*n <= word_len, "plan {plan:?} at {ch:?}");
+            }
+        }
+        if ch == ' ' {
+            word_len = 0;
+        } else {
+            word_len += 1;
+        }
+    }
+    assert_eq!(screen, "thí í a test ");
+}
+
+#[test]
+fn pin_regression_edit_committed_on_restores_sentence() {
+    let mut d = dispatcher();
+    assert_eq!(replay(&mut d, "this is a test "), "this is a test ");
+}
