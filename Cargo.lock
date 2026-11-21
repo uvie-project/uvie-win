@@ -268,7 +268,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -1177,7 +1177,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3816,7 +3816,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4357,10 +4357,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4791,8 +4791,8 @@ dependencies = [
 
 [[package]]
 name = "uvie"
-version = "2.8.3"
-source = "git+https://github.com/uvie-project/uvie-rs?tag=uvie-host-v0.2.1#9400b20f823ca6dd119476b85ddb214f9bf77a5a"
+version = "3.1.1"
+source = "git+https://github.com/uvie-project/uvie-rs?tag=v3.1.1#6a8d6ecccc901392903f0292fcc4d27c18d07cf7"
 dependencies = [
  "cbindgen",
 ]
@@ -4809,7 +4809,7 @@ dependencies = [
 [[package]]
 name = "uvie-host"
 version = "0.2.1"
-source = "git+https://github.com/uvie-project/uvie-rs?tag=uvie-host-v0.2.1#9400b20f823ca6dd119476b85ddb214f9bf77a5a"
+source = "git+https://github.com/uvie-project/uvie-rs?tag=v3.1.1#6a8d6ecccc901392903f0292fcc4d27c18d07cf7"
 dependencies = [
  "serde",
  "serde_json",
