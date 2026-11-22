@@ -268,7 +268,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -1177,7 +1177,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3816,7 +3816,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4357,10 +4357,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4791,15 +4791,15 @@ dependencies = [
 
 [[package]]
 name = "uvie"
-version = "3.1.5"
-source = "git+https://github.com/uvie-project/uvie-rs?tag=v3.1.5#f2c613d66e86a665c8a598594a1ceb3da6e64a77"
+version = "3.1.6"
+source = "git+https://github.com/uvie-project/uvie-rs?tag=v3.1.6#5d73d61a8d871f36ee093f44bfc600683577bad1"
 dependencies = [
  "cbindgen",
 ]
 
 [[package]]
 name = "uvie-core"
-version = "1.4.2"
+version = "1.4.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -4809,7 +4809,7 @@ dependencies = [
 [[package]]
 name = "uvie-host"
 version = "0.2.1"
-source = "git+https://github.com/uvie-project/uvie-rs?tag=v3.1.5#f2c613d66e86a665c8a598594a1ceb3da6e64a77"
+source = "git+https://github.com/uvie-project/uvie-rs?tag=v3.1.6#5d73d61a8d871f36ee093f44bfc600683577bad1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4818,7 +4818,7 @@ dependencies = [
 
 [[package]]
 name = "uvie-slintui"
-version = "1.4.2"
+version = "1.4.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -4830,7 +4830,7 @@ dependencies = [
 
 [[package]]
 name = "uvie-win"
-version = "1.4.2"
+version = "1.4.3"
 dependencies = [
  "embed-resource",
  "serde",

@@ -54,8 +54,8 @@ The engine and the shared host layer are pinned together (same uvie-rs
 tag):
 
 ```toml
-uvie      = { git = "https://github.com/uvie-project/uvie-rs", tag = "v3.1.5" }
-uvie-host = { git = "https://github.com/uvie-project/uvie-rs", tag = "v3.1.5" }
+uvie      = { git = "https://github.com/uvie-project/uvie-rs", tag = "v3.1.6" }
+uvie-host = { git = "https://github.com/uvie-project/uvie-rs", tag = "v3.1.6" }
 ```
 
 `uvie` is the Vietnamese engine; `uvie-host` is the platform-neutral
