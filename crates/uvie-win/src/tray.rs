@@ -4,15 +4,15 @@
 //! A hidden message-only window owns the icon and receives the menu clicks;
 //! actions are forwarded to the app via a callback.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use uvie_core::settings::Hotkey;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT,
-    MOD_SHIFT,
+    GetDoubleClickTime, RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL,
+    MOD_NOREPEAT, MOD_SHIFT,
 };
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
@@ -22,7 +22,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, KillTimer, LoadIconW, PostMessageW, PostQuitMessage, RegisterClassExW,
     SetForegroundWindow, SetTimer, TrackPopupMenu, CW_USEDEFAULT, HICON, IDI_APPLICATION,
     MF_SEPARATOR, MF_STRING, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_HOTKEY,
-    WM_LBUTTONDBLCLK, WM_NULL, WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSEXW, WS_EX_NOACTIVATE,
+    WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSEXW,
+    WS_EX_NOACTIVATE,
 };
 
 /// App icon resource id (app.rc: `IDI_APP_ICON ICON "assets/uvie.ico"`).
@@ -51,6 +52,9 @@ pub const CMD_SYNC_SETTINGS: usize = 4;
 
 /// Timer id for the settings/macro file poll.
 const TIMER_SETTINGS: usize = 1;
+/// One-shot timer used to tell a single tray click apart from the first
+/// half of a double-click.
+const TIMER_CLICK: usize = 2;
 
 /// Tray callback message id (NOTIFYICONDATAW::uCallbackMessage).
 const WM_TRAYICON: u32 = WM_USER + 0x55;
@@ -80,6 +84,9 @@ type MenuHandler = RefCell<Option<Box<dyn FnMut(usize)>>>;
 
 thread_local! {
     static MENU_HANDLER: MenuHandler = const { RefCell::new(None) };
+    /// The up event immediately following WM_LBUTTONDBLCLK is the second
+    /// half of that double-click, not a new single click.
+    static SUPPRESS_TRAY_CLICK_UP: Cell<bool> = const { Cell::new(false) };
 }
 
 pub struct TrayIcon {
@@ -190,6 +197,7 @@ impl Drop for TrayIcon {
             let _ = Shell_NotifyIconW(NIM_DELETE, &data);
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_TOGGLE);
             let _ = KillTimer(Some(self.hwnd), TIMER_SETTINGS);
+            let _ = KillTimer(Some(self.hwnd), TIMER_CLICK);
             let _ = DestroyWindow(self.hwnd);
         }
         MENU_HANDLER.with(|h| *h.borrow_mut() = None);
@@ -206,14 +214,31 @@ unsafe extern "system" fn wnd_proc(
         WM_TRAYICON => {
             match lparam.0 as u32 {
                 WM_RBUTTONUP => show_menu(hwnd),
-                // Double-click opens the settings window.
-                WM_LBUTTONDBLCLK => MENU_HANDLER.with(|h| {
-                    if let Ok(mut g) = h.try_borrow_mut() {
-                        if let Some(f) = g.as_mut() {
-                            f(CMD_OPEN_SETTINGS);
+                // Single click toggles Vi/En like EVKey. Wait one
+                // double-click interval so double-click can keep its
+                // existing Settings action without toggling twice first.
+                WM_LBUTTONUP => {
+                    let skip = SUPPRESS_TRAY_CLICK_UP.with(|s| s.replace(false));
+                    if !skip {
+                        unsafe {
+                            let _ = SetTimer(Some(hwnd), TIMER_CLICK, GetDoubleClickTime(), None);
                         }
                     }
-                }),
+                }
+                // Double-click opens the settings window.
+                WM_LBUTTONDBLCLK => {
+                    SUPPRESS_TRAY_CLICK_UP.with(|s| s.set(true));
+                    unsafe {
+                        let _ = KillTimer(Some(hwnd), TIMER_CLICK);
+                    }
+                    MENU_HANDLER.with(|h| {
+                        if let Ok(mut g) = h.try_borrow_mut() {
+                            if let Some(f) = g.as_mut() {
+                                f(CMD_OPEN_SETTINGS);
+                            }
+                        }
+                    })
+                }
                 _ => {}
             }
             LRESULT(0)
@@ -234,6 +259,17 @@ unsafe extern "system" fn wnd_proc(
                     if let Ok(mut g) = h.try_borrow_mut() {
                         if let Some(f) = g.as_mut() {
                             f(CMD_SYNC_SETTINGS);
+                        }
+                    }
+                });
+            } else if wparam.0 == TIMER_CLICK {
+                unsafe {
+                    let _ = KillTimer(Some(hwnd), TIMER_CLICK);
+                }
+                MENU_HANDLER.with(|h| {
+                    if let Ok(mut g) = h.try_borrow_mut() {
+                        if let Some(f) = g.as_mut() {
+                            f(CMD_TOGGLE_LANGUAGE);
                         }
                     }
                 });
